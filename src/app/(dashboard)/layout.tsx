@@ -6,6 +6,7 @@ import { createServerSupabase } from "@/lib/supabase-server";
 const NAV_ITEMS = [
   { href: "/jobs", label: "Jobs" },
   { href: "/resume", label: "Resume" },
+  { href: "/profile", label: "Profile" },
   { href: "/applications", label: "Applications" },
   { href: "/chat", label: "Chat" },
   { href: "/insights", label: "Insights" },

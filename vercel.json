@@ -3,6 +3,10 @@
     {
       "path": "/api/cron/ingest-jobs",
       "schedule": "0 2 * * *"
+    },
+    {
+      "path": "/api/cron/embed-jobs",
+      "schedule": "0 3 * * *"
     }
   ]
 }

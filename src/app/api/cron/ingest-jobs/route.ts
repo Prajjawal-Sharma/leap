@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 
 import { GREENHOUSE_COMPANIES } from "@/lib/jobs/companies";
+import { runEmbedJobs, type EmbedRunSummary } from "@/lib/jobs/embed-runner";
 import { fetchGreenhouseJobs } from "@/lib/jobs/greenhouse";
 import type { NormalizedJob } from "@/lib/jobs/normalize";
 import { createAdminSupabase } from "@/lib/supabase-admin";
@@ -24,9 +25,19 @@ type RunSummary = {
   total_companies_succeeded: number;
   total_companies_failed: number;
   total_jobs_upserted: number;
+  embeddings_generated: number;
+  embedding_summary: EmbedRunSummary | { skipped: true; reason: string };
   errors_per_company: Record<string, string>;
   per_company: CompanyResult[];
 };
+
+// Cap how many jobs we embed inline so the ingest run still fits inside
+// maxDuration even when the dedicated embed-jobs cron has a backlog. The
+// dedicated cron picks up anything we don't get to.
+//
+// On Tier 1 (~3000 RPM) 250 jobs/call clears comfortably inside the 60s
+// function ceiling alongside Greenhouse fetches and DB upserts.
+const INLINE_EMBED_LIMIT = 250;
 
 function isAuthorized(request: NextRequest): boolean {
   const expected = process.env.CRON_SECRET;
@@ -93,6 +104,21 @@ async function runIngest(): Promise<RunSummary> {
   const succeeded = perCompany.filter((c) => c.ok).length;
   const failed = perCompany.length - succeeded;
 
+  // Inline embedding pass: catches the just-ingested jobs and any earlier
+  // jobs the dedicated embed-jobs cron hasn't gotten to yet. We cap at
+  // INLINE_EMBED_LIMIT so a large backlog can't push us past maxDuration —
+  // the dedicated cron at 03:00 UTC mops up the rest.
+  let embeddingSummary: RunSummary["embedding_summary"];
+  let embeddingsGenerated = 0;
+  try {
+    embeddingSummary = await runEmbedJobs(admin, { limit: INLINE_EMBED_LIMIT });
+    embeddingsGenerated = embeddingSummary.total_embedded;
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : "unknown error";
+    console.error(`[ingest-jobs] inline embed failed:`, reason);
+    embeddingSummary = { skipped: true, reason };
+  }
+
   return {
     ok: failed === 0,
     duration_ms: Date.now() - startedAt,
@@ -100,6 +126,8 @@ async function runIngest(): Promise<RunSummary> {
     total_companies_succeeded: succeeded,
     total_companies_failed: failed,
     total_jobs_upserted: totalUpserted,
+    embeddings_generated: embeddingsGenerated,
+    embedding_summary: embeddingSummary,
     errors_per_company: errorsPerCompany,
     per_company: perCompany,
   };

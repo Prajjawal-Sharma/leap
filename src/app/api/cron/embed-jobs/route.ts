@@ -19,9 +19,19 @@ function isAuthorized(request: NextRequest): boolean {
 }
 
 async function handle() {
-  const admin = createAdminSupabase();
-  const summary = await runEmbedJobs(admin, { limit: EMBED_LIMIT });
-  return NextResponse.json(summary);
+  try {
+    const admin = createAdminSupabase();
+    const summary = await runEmbedJobs(admin, { limit: EMBED_LIMIT });
+    return NextResponse.json(summary);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    const stack = err instanceof Error ? err.stack : undefined;
+    console.error("[embed-jobs] route handler threw:", message, stack);
+    return NextResponse.json(
+      { ok: false, error: message, stack },
+      { status: 500 }
+    );
+  }
 }
 
 export async function GET(request: NextRequest) {

@@ -6,7 +6,10 @@
       "Bash(npx tsc *)",
       "Bash(echo \"EXIT=$?\")",
       "Bash(npx eslint *)",
-      "Bash(npm run *)"
+      "Bash(npm run *)",
+      "Bash(curl *)",
+      "Bash(tasklist)",
+      "Bash(node *)"
     ]
   }
 }

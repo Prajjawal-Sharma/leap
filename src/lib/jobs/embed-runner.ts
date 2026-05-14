@@ -31,21 +31,34 @@ export type EmbedRunSummary = {
 
 // supabase-js can't express "id NOT IN (subquery)" via the URL filter API
 // without busting URL length on real-world ID counts. Two-step approach: pull
-// the (small) set of already-embedded job_ids into memory, then page through
-// jobs newest-first and collect unembedded ones until we hit `limit`.
+// the set of already-embedded job_ids into memory, then page through jobs
+// newest-first and collect unembedded ones until we hit `limit`.
+//
+// The embedded-ids fetch MUST paginate — supabase-js applies a default 1000-row
+// cap on SELECTs, and once we cross that threshold the in-memory set is
+// silently incomplete. The previous version of this code lost ~500 IDs once
+// job_embeddings passed 1000 rows, which made the runner re-embed (upsert
+// into) the same 500 rows on every cron call while reporting them as new
+// successes.
 async function findUnembeddedJobs(
   admin: SupabaseAdmin,
   limit: number
 ): Promise<JobRow[]> {
-  const { data: embedded, error: e1 } = await admin
-    .from("job_embeddings")
-    .select("job_id");
-  if (e1) {
-    throw new Error(`fetch job_embeddings ids failed: ${e1.message}`);
+  const embeddedSet = new Set<string>();
+  let embOffset = 0;
+  while (true) {
+    const { data: page, error: e1 } = await admin
+      .from("job_embeddings")
+      .select("job_id")
+      .range(embOffset, embOffset + PAGE_SIZE - 1);
+    if (e1) {
+      throw new Error(`fetch job_embeddings ids failed: ${e1.message}`);
+    }
+    if (!page || page.length === 0) break;
+    for (const r of page) embeddedSet.add(r.job_id as string);
+    if (page.length < PAGE_SIZE) break;
+    embOffset += PAGE_SIZE;
   }
-  const embeddedSet = new Set(
-    (embedded ?? []).map((r) => r.job_id as string)
-  );
 
   const collected: JobRow[] = [];
   let offset = 0;
@@ -94,6 +107,12 @@ export async function runEmbedJobs(
   const startedAt = Date.now();
 
   const jobs = await findUnembeddedJobs(admin, limit);
+
+  console.log(
+    `[embed-jobs] candidate fetch: total=${jobs.length}, first_ids=${JSON.stringify(
+      jobs.slice(0, 3).map((j) => j.id)
+    )}`
+  );
 
   if (jobs.length === 0) {
     return {
@@ -152,25 +171,45 @@ export async function runEmbedJobs(
   // PostgREST request. 100 rows × 768 floats ≈ 300KB — comfortable.
   const DB_CHUNK = 100;
   for (let i = 0; i < valid.length; i += DB_CHUNK) {
+    const chunkNum = Math.floor(i / DB_CHUNK) + 1;
     const sliceJobs = valid.slice(i, i + DB_CHUNK);
     const rows = sliceJobs.map((s, idx) => ({
       job_id: s.job.id,
       embedding: vectors[i + idx],
     }));
 
-    const { error } = await admin
+    console.log(
+      `[embed-jobs] chunk ${chunkNum} upsert: count=${rows.length}, ` +
+        `job_ids=${JSON.stringify(rows.map((r) => r.job_id))}, ` +
+        `vector_lengths=${JSON.stringify(rows.map((r) => r.embedding?.length ?? -1))}`
+    );
+
+    const { error, data } = await admin
       .from("job_embeddings")
-      .upsert(rows, { onConflict: "job_id" });
+      .upsert(rows, { onConflict: "job_id" })
+      .select("job_id");
+
+    console.log(
+      `[embed-jobs] chunk ${chunkNum} response:`,
+      JSON.stringify({ error, data_count: data?.length ?? 0, data })
+    );
 
     if (error) {
       console.error(
-        `[embed-jobs] insert chunk ${Math.floor(i / DB_CHUNK) + 1} failed:`,
+        `[embed-jobs] insert chunk ${chunkNum} failed:`,
         error.message
       );
       totalFailed += rows.length;
       continue;
     }
-    totalEmbedded += rows.length;
+    // Reflect rows actually returned by PostgREST, not the input size — the
+    // previous "trust the input batch" accounting was what hid the 1000-row
+    // SELECT cap bug above: upsert was succeeding but updating the same rows.
+    const written = data?.length ?? 0;
+    totalEmbedded += written;
+    if (written < rows.length) {
+      totalFailed += rows.length - written;
+    }
   }
 
   return {

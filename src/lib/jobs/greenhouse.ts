@@ -53,26 +53,62 @@ export function humanizeCompany(slug: string): string {
 
 // Best-effort HTML → plain text. Greenhouse content is well-formed marketing
 // HTML (no scripts, no styles in practice) but we strip both anyway.
+//
+// Order matters here:
+//   1. Drop entire <style>/<script> blocks (content + bounding tags).
+//   2. Convert structural tags to newlines BEFORE stripping, so the layout
+//      survives in plain text (each <li> on its own line, paragraph breaks
+//      become blank lines, etc.). Both opening and closing variants are
+//      covered to handle pages with attributes (`<p class="foo">`) and
+//      self-closing forms (`<br />`).
+//   3. Strip every remaining tag — anything that looks like `<...>`.
+//   4. Decode common HTML entities.
+//   5. Defensive second pass on `<...>` — in case an encoded `&lt;p&gt;`
+//      was decoded into a literal `<p>` by step 4 (rare but cheap).
+//   6. Collapse whitespace.
 function stripHtml(html: string): string {
-  return html
-    .replace(/<style[\s\S]*?<\/style>/gi, "")
-    .replace(/<script[\s\S]*?<\/script>/gi, "")
-    .replace(/<br\s*\/?>/gi, "\n")
-    .replace(/<\/(p|div|li|h[1-6])>/gi, "\n")
-    .replace(/<\/?[^>]+>/g, "")
+  let out = html;
+
+  // 1. Block elements that carry their own content
+  out = out.replace(/<style\b[\s\S]*?<\/style>/gi, "");
+  out = out.replace(/<script\b[\s\S]*?<\/script>/gi, "");
+  out = out.replace(/<!--[\s\S]*?-->/g, "");
+
+  // 2. Structural tags → newlines (do this before the catch-all strip)
+  out = out.replace(/<br\s*\/?\s*>/gi, "\n");
+  // Opening + closing of block-level tags both produce a line break so we
+  // preserve list/paragraph boundaries even when the source HTML is sloppy.
+  out = out.replace(
+    /<\/?(p|div|li|ul|ol|tr|table|h[1-6]|section|article|header|footer|nav|aside)\b[^>]*>/gi,
+    "\n"
+  );
+
+  // 3. Strip everything else (spans, anchors with hrefs, strong, em, …)
+  out = out.replace(/<\/?[a-zA-Z][^>]*>/g, "");
+
+  // 4. Decode the entity set we actually see in greenhouse payloads
+  out = out
     .replace(/&nbsp;/gi, " ")
     .replace(/&amp;/gi, "&")
-    .replace(/&lt;/gi, "<")
-    .replace(/&gt;/gi, ">")
     .replace(/&quot;/gi, '"')
     .replace(/&#39;/gi, "'")
     .replace(/&apos;/gi, "'")
-    .replace(/&[a-z0-9#]+;/gi, " ")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&[a-zA-Z0-9#]+;/gi, " ");
+
+  // 5. Defensive: any tag-shaped residue left after entity decoding
+  out = out.replace(/<[^>]*>/g, "");
+
+  // 6. Whitespace cleanup
+  out = out
     .replace(/\r\n?/g, "\n")
     .replace(/\n{3,}/g, "\n\n")
     .replace(/[ \t]+/g, " ")
     .replace(/^[ \t]+|[ \t]+$/gm, "")
     .trim();
+
+  return out;
 }
 
 function toIsoOrNull(value: string | null | undefined): string | null {

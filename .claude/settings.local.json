@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install *)",
+      "Bash(node -e \"const m = require\\('pdf-parse'\\); console.log\\('keys:', Object.keys\\(m\\).slice\\(0,20\\)\\); console.log\\('default fn?:', typeof m\\); console.log\\('has PDFParse?:', typeof m.PDFParse\\);\")",
+      "Bash(npx tsc *)",
+      "Bash(echo \"EXIT=$?\")",
+      "Bash(npx eslint *)",
+      "Bash(npm run *)",
+      "Bash(curl *)",
+      "Bash(tasklist)",
+      "Bash(node *)"
+    ]
+  }
+}

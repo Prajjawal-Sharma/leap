@@ -78,23 +78,9 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const { data: existingPrimary, error: existingError } = await supabase
-    .from("resumes")
-    .select("id")
-    .eq("user_id", user.id)
-    .eq("is_primary", true)
-    .limit(1);
-
-  if (existingError) {
-    await admin.storage.from(BUCKET).remove([storagePath]);
-    return NextResponse.json(
-      { error: existingError.message },
-      { status: 500 }
-    );
-  }
-
-  const isPrimary = !existingPrimary || existingPrimary.length === 0;
-
+  // New uploads always become the primary. Two-step (demote others, then
+  // promote new) is best-effort and runs *after* the insert succeeds — the
+  // resume row is the source of truth; the primary flag is a UI affordance.
   const { data: inserted, error: insertError } = await supabase
     .from("resumes")
     .insert({
@@ -102,7 +88,7 @@ export async function POST(request: NextRequest) {
       storage_path: storagePath,
       file_name: file.name,
       file_size_bytes: file.size,
-      is_primary: isPrimary,
+      is_primary: true,
     })
     .select("id, storage_path, file_name")
     .single();
@@ -113,6 +99,32 @@ export async function POST(request: NextRequest) {
       { error: insertError?.message ?? "Insert failed" },
       { status: 500 }
     );
+  }
+
+  try {
+    const { error: demoteErr } = await supabase
+      .from("resumes")
+      .update({ is_primary: false })
+      .eq("user_id", user.id)
+      .neq("id", inserted.id);
+    if (demoteErr) {
+      console.error(
+        `[resume/upload] failed to demote other primaries: ${demoteErr.message}`
+      );
+    }
+
+    const { error: promoteErr } = await supabase
+      .from("resumes")
+      .update({ is_primary: true })
+      .eq("id", inserted.id);
+    if (promoteErr) {
+      console.error(
+        `[resume/upload] failed to ensure new resume primary: ${promoteErr.message}`
+      );
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "unknown error";
+    console.error(`[resume/upload] primary flag sweep threw: ${message}`);
   }
 
   return NextResponse.json(inserted, { status: 201 });

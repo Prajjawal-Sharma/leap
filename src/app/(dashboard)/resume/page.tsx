@@ -130,15 +130,21 @@ export default function ResumePage() {
         const data = (await res.json()) as { resumes: Resume[] };
         if (cancelled) return;
         setResumes(data.resumes);
-        const primary =
-          data.resumes.find((r) => r.is_primary) ?? data.resumes[0] ?? null;
-        if (primary && primary.ats_score !== null) {
-          setActiveResume(primary);
+        // A resume is "successful" only when both parse + score finished.
+        // The /api/resume/list response is already ordered by created_at desc
+        // so picking successful[0] when no primary is flagged gives us the
+        // most recent successful upload — robust against the historical bug
+        // where multiple resumes carried is_primary = true at once.
+        const successful = data.resumes.filter(
+          (r) => r.parsed_content !== null && r.ats_score !== null
+        );
+        const display =
+          successful.find((r) => r.is_primary) ?? successful[0] ?? null;
+        if (display) {
+          setActiveResume(display);
           setPhase("ready");
-        } else if (primary) {
-          setActiveResume(primary);
-          setPhase("idle");
         } else {
+          setActiveResume(null);
           setPhase("idle");
         }
       } catch (err) {

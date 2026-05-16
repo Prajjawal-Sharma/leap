@@ -2,7 +2,7 @@ import Link from "next/link";
 import { Suspense } from "react";
 import { headers } from "next/headers";
 
-import JobCard from "@/components/features/JobCard";
+import JobFeed from "@/components/features/JobFeed";
 import type { MatchResult } from "@/lib/jobs/match-engine";
 
 export const dynamic = "force-dynamic";
@@ -161,16 +161,7 @@ async function JobMatches() {
   }
 
   return (
-    <div className="mt-6 space-y-4">
-      <p className="text-xs text-neutral-500">
-        Showing top {matches.length} of {total_searched} matched roles
-      </p>
-      <div className="grid gap-4">
-        {matches.map((m) => (
-          <JobCard key={m.job.id} match={m} />
-        ))}
-      </div>
-    </div>
+    <JobFeed initialMatches={matches} totalSearched={total_searched} />
   );
 }
 

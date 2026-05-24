@@ -2,7 +2,7 @@ import Link from "next/link";
 import { Suspense } from "react";
 import { headers } from "next/headers";
 
-import KanbanBoard from "@/components/features/KanbanBoard";
+import ApplicationsDashboard from "@/components/features/ApplicationsDashboard";
 import type { ApplicationWithJob } from "@/types/applications";
 
 export const dynamic = "force-dynamic";
@@ -47,56 +47,103 @@ async function fetchApplications(): Promise<FetchOutcome> {
   return { kind: "ok", applications: data.applications ?? [] };
 }
 
-function BoardSkeleton() {
+function StatTileSkeleton() {
   return (
-    <div className="mt-6 flex gap-3 overflow-x-auto pb-2">
-      {Array.from({ length: 6 }).map((_, i) => (
-        <div
-          key={i}
-          className="shrink-0 w-[85vw] sm:w-[300px] md:w-[280px] xl:w-[300px] rounded-xl bg-neutral-900/40 ring-1 ring-white/10"
-        >
-          <div className="h-10 border-b border-white/10 px-3 py-2.5 flex items-center justify-between">
-            <div className="h-3 w-20 rounded bg-white/10 animate-pulse" />
-            <div className="h-3 w-6 rounded bg-white/5 animate-pulse" />
-          </div>
-          <div className="px-2.5 py-2.5 space-y-2">
-            {Array.from({ length: 2 }).map((_, j) => (
-              <div
-                key={j}
-                className="rounded-lg bg-neutral-900/80 ring-1 ring-white/10 px-3 py-2.5 animate-pulse"
-              >
-                <div className="flex gap-2.5">
-                  <div className="h-9 w-9 rounded-md bg-white/5" />
-                  <div className="flex-1 space-y-2">
-                    <div className="h-3 w-3/4 rounded bg-white/10" />
-                    <div className="h-2.5 w-1/2 rounded bg-white/5" />
-                    <div className="h-3 w-1/3 rounded bg-white/5" />
-                  </div>
-                </div>
+    <div className="rounded-xl bg-neutral-900/40 ring-1 ring-white/10 px-4 py-3.5">
+      <div className="h-3 w-20 rounded bg-white/10 animate-pulse" />
+      <div className="mt-2 h-7 w-12 rounded bg-white/10 animate-pulse" />
+      <div className="mt-2 h-2.5 w-28 rounded bg-white/5 animate-pulse" />
+    </div>
+  );
+}
+
+function ColumnSkeleton() {
+  return (
+    <div className="rounded-xl bg-neutral-900/30 ring-1 ring-white/10">
+      <div className="px-3 py-2.5 border-b border-white/[0.06] flex items-center justify-between">
+        <div className="h-3 w-16 rounded bg-white/10 animate-pulse" />
+        <div className="h-3 w-5 rounded bg-white/5 animate-pulse" />
+      </div>
+      <div className="px-2 py-2 space-y-2">
+        {Array.from({ length: 2 }).map((_, j) => (
+          <div
+            key={j}
+            className="rounded-lg bg-neutral-900/80 ring-1 ring-white/10 px-3 py-2.5"
+          >
+            <div className="flex items-start gap-2.5">
+              <div className="h-8 w-8 rounded-md bg-white/10 animate-pulse" />
+              <div className="flex-1 space-y-1.5">
+                <div className="h-3 w-3/4 rounded bg-white/10 animate-pulse" />
+                <div className="h-2.5 w-1/2 rounded bg-white/5 animate-pulse" />
               </div>
-            ))}
+            </div>
           </div>
-        </div>
-      ))}
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function DashboardSkeleton() {
+  return (
+    <div className="space-y-5">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        {Array.from({ length: 4 }).map((_, i) => (
+          <StatTileSkeleton key={i} />
+        ))}
+      </div>
+      <div className="flex items-center justify-between gap-3">
+        <div className="h-9 w-72 rounded-md bg-neutral-900/60 ring-1 ring-white/10 animate-pulse" />
+        <div className="h-9 w-44 rounded-md bg-neutral-900/60 ring-1 ring-white/10 animate-pulse" />
+      </div>
+      <div className="hidden xl:grid xl:grid-cols-6 gap-3">
+        {Array.from({ length: 6 }).map((_, i) => (
+          <ColumnSkeleton key={i} />
+        ))}
+      </div>
+      <div className="xl:hidden space-y-3">
+        {Array.from({ length: 3 }).map((_, i) => (
+          <ColumnSkeleton key={i} />
+        ))}
+      </div>
     </div>
   );
 }
 
 function EmptyState() {
   return (
-    <div className="mt-6 rounded-xl bg-neutral-900/60 ring-1 ring-white/10 p-8 text-center">
-      <h2 className="text-lg font-semibold text-white">
+    <div className="rounded-xl bg-gradient-to-b from-neutral-900/60 to-neutral-900/30 ring-1 ring-white/10 p-10 text-center">
+      <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-xl bg-[#6366f1]/15 ring-1 ring-[#6366f1]/30">
+        <svg
+          width="22"
+          height="22"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          className="text-[#a5a8f5]"
+          aria-hidden="true"
+        >
+          <rect x="3" y="4" width="5" height="16" rx="1.5" />
+          <rect x="10" y="4" width="5" height="10" rx="1.5" />
+          <rect x="17" y="4" width="5" height="6" rx="1.5" />
+        </svg>
+      </div>
+      <h2 className="mt-4 text-base font-semibold text-white">
         Your tracker is empty
       </h2>
       <p className="mt-2 text-sm text-neutral-400 max-w-md mx-auto">
-        Save jobs from your feed to start tracking. As you apply and hear
-        back, drag them across the columns to keep your pipeline visible.
+        Save jobs from your feed to start tracking. Drag cards between columns
+        as you apply, interview, and hear back — your pipeline stays visible
+        end to end.
       </p>
       <Link
         href="/jobs"
         className="mt-5 inline-flex items-center rounded-md bg-[#6366f1] hover:bg-[#4f52d5] px-4 py-2 text-sm font-medium text-white"
       >
-        Browse jobs
+        Browse matched jobs
       </Link>
     </div>
   );
@@ -104,7 +151,7 @@ function EmptyState() {
 
 function ErrorCard({ message }: { message: string }) {
   return (
-    <div className="mt-6 rounded-xl bg-red-500/10 ring-1 ring-red-500/30 p-5">
+    <div className="rounded-xl bg-red-500/10 ring-1 ring-red-500/30 p-5">
       <p className="text-sm text-red-100 font-medium">
         Could not load applications
       </p>
@@ -113,7 +160,7 @@ function ErrorCard({ message }: { message: string }) {
   );
 }
 
-async function ApplicationsList() {
+async function ApplicationsContent() {
   const outcome = await fetchApplications();
 
   if (outcome.kind === "unauthorized") {
@@ -128,25 +175,29 @@ async function ApplicationsList() {
     return <EmptyState />;
   }
 
-  return (
-    <div className="mt-6">
-      <KanbanBoard initialApplications={outcome.applications} />
-    </div>
-  );
+  return <ApplicationsDashboard initialApplications={outcome.applications} />;
 }
 
 export default function ApplicationsPage() {
   return (
-    <section>
-      <header>
-        <h1 className="text-2xl md:text-3xl font-semibold">Applications</h1>
-        <p className="mt-1 text-sm text-neutral-400">
-          Drag cards between columns as your applications progress.
+    <section className="space-y-6">
+      <header className="flex flex-col gap-1">
+        <div className="flex items-center gap-2">
+          <h1 className="text-2xl md:text-3xl font-semibold tracking-tight">
+            Applications
+          </h1>
+          <span className="text-[10px] font-semibold uppercase tracking-wider rounded-full bg-white/[0.04] ring-1 ring-white/10 text-neutral-400 px-2 py-0.5">
+            Pipeline
+          </span>
+        </div>
+        <p className="text-sm text-neutral-400">
+          Track every role you&rsquo;re working — from saved leads to signed
+          offers. Drag cards between stages to update status.
         </p>
       </header>
 
-      <Suspense fallback={<BoardSkeleton />}>
-        <ApplicationsList />
+      <Suspense fallback={<DashboardSkeleton />}>
+        <ApplicationsContent />
       </Suspense>
     </section>
   );

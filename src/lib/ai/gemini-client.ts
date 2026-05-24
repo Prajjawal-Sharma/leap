@@ -316,3 +316,159 @@ export async function callGemini(
     }
   );
 }
+
+// ---------------------------------------------------------------------------
+// Streaming multi-turn — chat
+// ---------------------------------------------------------------------------
+
+export type GeminiContent = {
+  role: "user" | "model";
+  parts: Array<{ text: string }>;
+};
+
+export type StreamGeminiOptions = {
+  systemInstruction?: string;
+  temperature?: number;
+  model?: string;
+};
+
+// Retry behaviour mirrors withGeminiKey: rotate keys + backoff on
+// 429/5xx/network until the stream opens. Once data starts flowing,
+// mid-stream failures terminate the iterator — recovery would require
+// re-sending the full prompt under a new key, which loses partial output
+// and is not worth the complexity at v1.
+export async function streamGemini(
+  contents: GeminiContent[],
+  opts: StreamGeminiOptions = {}
+): Promise<AsyncIterable<string>> {
+  const model = opts.model ?? DEFAULT_MODEL;
+  const temperature = opts.temperature ?? 0.7;
+  const body = JSON.stringify({
+    contents,
+    generationConfig: { temperature },
+    ...(opts.systemInstruction
+      ? { systemInstruction: { parts: [{ text: opts.systemInstruction }] } }
+      : {}),
+  });
+
+  let lastError: GeminiError | null = null;
+
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    const picked = pickFreshKey();
+    if (!picked) {
+      throw new GeminiError(
+        "All Gemini keys are rate-limited. Try again in 60s.",
+        429,
+        true
+      );
+    }
+
+    let res: Response;
+    try {
+      res = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse&key=${picked.key}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body,
+        }
+      );
+    } catch (err) {
+      lastError = new GeminiError(
+        err instanceof Error ? err.message : "Network error",
+        0,
+        true
+      );
+      if (attempt < MAX_ATTEMPTS - 1) await sleep(backoffMs(attempt));
+      continue;
+    }
+
+    if (res.ok && res.body) {
+      return parseSSEStream(res.body);
+    }
+
+    const detail = await res.text().catch(() => "");
+    const snippet = detail.slice(0, 200);
+
+    if (res.status === 429) {
+      markCooldown(picked.key);
+      lastError = new GeminiError(
+        "Gemini rate-limited, please retry in 60s",
+        429,
+        true
+      );
+      if (attempt < MAX_ATTEMPTS - 1) await sleep(backoffMs(attempt));
+      continue;
+    }
+
+    if (res.status === 500 || res.status === 503) {
+      lastError = new GeminiError(
+        `Gemini temporarily unavailable (${res.status})${snippet ? `: ${snippet}` : ""}`,
+        res.status,
+        true
+      );
+      if (attempt < MAX_ATTEMPTS - 1) await sleep(backoffMs(attempt));
+      continue;
+    }
+
+    if (res.status >= 400 && res.status < 500) {
+      throw new GeminiError(
+        `Gemini error ${res.status}${snippet ? `: ${snippet}` : ""}`,
+        res.status,
+        false
+      );
+    }
+
+    lastError = new GeminiError(
+      `Gemini error ${res.status}${snippet ? `: ${snippet}` : ""}`,
+      res.status,
+      true
+    );
+    if (attempt < MAX_ATTEMPTS - 1) await sleep(backoffMs(attempt));
+  }
+
+  throw lastError ?? new GeminiError("Gemini stream failed", 502, true);
+}
+
+async function* parseSSEStream(
+  body: ReadableStream<Uint8Array>
+): AsyncGenerator<string, void, unknown> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      let sep = buffer.indexOf("\n\n");
+      while (sep !== -1) {
+        const eventBlock = buffer.slice(0, sep);
+        buffer = buffer.slice(sep + 2);
+
+        const dataLines = eventBlock
+          .split("\n")
+          .filter((l) => l.startsWith("data:"))
+          .map((l) => l.slice(5).trimStart());
+
+        sep = buffer.indexOf("\n\n");
+        if (dataLines.length === 0) continue;
+
+        const payload = dataLines.join("\n");
+        if (payload === "[DONE]") return;
+
+        try {
+          const obj = JSON.parse(payload) as GeminiResponse;
+          const text = obj.candidates?.[0]?.content?.parts?.[0]?.text;
+          if (text) yield text;
+        } catch {
+          // Skip malformed SSE chunks rather than failing the whole stream.
+        }
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}

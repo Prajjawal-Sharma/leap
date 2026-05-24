@@ -9,7 +9,8 @@
       "Bash(npm run *)",
       "Bash(curl *)",
       "Bash(tasklist)",
-      "Bash(node *)"
+      "Bash(node *)",
+      "Bash(npx next *)"
     ]
   }
 }

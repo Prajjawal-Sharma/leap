@@ -15,7 +15,7 @@ Working dir: D:\Prajjawal\Antigravity\leap
 - Framework: Next.js 15 App Router + TypeScript strict mode
 - UI: Tailwind CSS + shadcn/ui primitives + Framer Motion
 - Database: Supabase (Postgres + pgvector + Auth + Storage)
-- AI: Gemini API (Tier 1 on GEMINI_KEY_1, 3000 RPM) via 5-key rotation for chat
+- AI: Gemini API — chat (gemini-2.5-flash) streams via Vercel AI SDK (@ai-sdk/google) on Tier 1 paid (GEMINI_KEY_1, 3000 RPM); free 8-key rotation (GEMINI_KEY_1..8) serves resume parse + ATS scoring
 - Embeddings: gemini-embedding-001, 768 dimensions, RETRIEVAL_DOCUMENT for jobs, RETRIEVAL_QUERY for resume
 - Job data: Greenhouse direct API (25 companies, ~3,800 jobs), more sources in Phase 2
 - Email: Resend free tier
@@ -42,16 +42,18 @@ Working dir: D:\Prajjawal\Antigravity\leap
 - RLS enabled on all tables
 
 ## AI Architecture
-- src/lib/ai/gemini-client.ts: two parallel paths
-  * callGeminiTier1() — uses GEMINI_KEY_1 only, for embeddings (Tier 1, 3000 RPM)
-  * callGemini() / withGeminiKey() — rotates GEMINI_KEY_1..8, for chat/scoring (free tier)
+- src/lib/ai/gemini-client.ts: three call paths
+  * callGeminiTier1() — GEMINI_KEY_1 only, raw fetch, for embeddings (Tier 1 paid, 3000 RPM)
+  * streamGemini() — chat, streams gemini-2.5-flash via the Vercel AI SDK (@ai-sdk/google) on the Tier 1 paid key
+  * callGemini() / withGeminiKey() — rotates GEMINI_KEY_1..8 (free tier), for resume parse + ATS scoring
 - src/lib/ai/embeddings.ts: embedText() and embedBatch() use Tier 1 path
 - src/lib/ai/ats-scorer.ts: Gemini analysis of resume vs best practices
+- src/lib/ai/chat-context.ts: buildSystemPrompt() grounds chat in profile + primary resume + recent applications
 
 ## Current Sprint: Week 3 — Application Intelligence
 Remaining features to build (in order):
-1. AI Career Chat (/chat) — Gemini 2.5 Flash with full user context streaming via Vercel AI SDK [NEXT]
-2. One-Click Tailored Resume — Gemini 2.5 Pro rewrites resume per JD, export PDF
+1. AI Career Chat (/chat) — gemini-2.5-flash, grounded in profile/resume/applications, streaming via the Vercel AI SDK on the Tier 1 paid key [SHIPPED on feat/ai-career-chat — not yet merged to dev]
+2. One-Click Tailored Resume — Gemini 2.5 Pro rewrites resume per JD, export PDF [NEXT]
 
 ## Coding Standards
 - Always use TypeScript strict mode — no ny unless absolutely necessary

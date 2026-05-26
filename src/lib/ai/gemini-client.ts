@@ -1,23 +1,32 @@
-// Two parallel call paths into the Gemini API:
+import { createGoogleGenerativeAI } from "@ai-sdk/google";
+import { streamText, type ModelMessage } from "ai";
+
+// Three call paths into the Gemini API:
 //
 //   1. Free-tier multi-key rotation (callGemini / withGeminiKey).
-//      Resume parse + score still run here. Per-project free-tier limits
-//      hover around 10–15 RPM, so we round-robin across GEMINI_KEY_1..KEY_8
+//      Resume parse + ATS score run here. Per-project free-tier limits
+//      hover around 10–15 RPM, so we round-robin across GEMINI_KEY_2..KEY_8
 //      and use 60s cooldowns + exponential backoff to ride out 429s.
 //
-//   2. Tier 1 paid single-key (callGeminiTier1 / getTier1Key).
-//      GEMINI_KEY_1's project was upgraded to Gemini API Tier 1 (paid),
-//      ~3000 RPM. Embeddings run here — there's no point rotating, and the
-//      per-key cooldown machinery would actively get in the way under heavy
+//   2. Tier 1 paid single-key, raw fetch (callGeminiTier1 / getTier1Key).
+//      GEMINI_KEY_1's project is on Gemini API Tier 1 (paid), ~3000 RPM.
+//      Embeddings run here — there's no point rotating, and the per-key
+//      cooldown machinery would actively get in the way under heavy
 //      throughput. Simple 3-attempt backoff is enough.
+//
+//   3. Tier 1 paid via the Vercel AI SDK (streamGemini).
+//      Interactive chat streams through @ai-sdk/google on the same paid
+//      key — a live conversation can't tolerate the free rotation's "all
+//      keys cooling, retry in 60s" stalls. Also sets up tool-calling later.
 //
 // Generation calls target gemini-2.5-flash. The 2.0-flash family was
 // deprecated 2026-03-03 and shuts down in September 2026.
 //
-// Pool reads GEMINI_KEY_1..GEMINI_KEY_8. Only populated entries are used,
-// so adding a sixth/seventh/eighth key in env is a no-restart change to env
-// vars and a redeploy. Rotation, cooldown, and backoff are size-agnostic.
-const keys = [
+// Free pool reads GEMINI_KEY_2..GEMINI_KEY_8 — KEY_1 is reserved for the paid
+// Tier 1 paths (embeddings + chat). Only populated entries are used, so adding
+// a key in env is a no-restart change. Rotation, cooldown, and backoff are
+// size-agnostic.
+const allKeys = [
   process.env.GEMINI_KEY_1,
   process.env.GEMINI_KEY_2,
   process.env.GEMINI_KEY_3,
@@ -28,9 +37,17 @@ const keys = [
   process.env.GEMINI_KEY_8,
 ].filter((k): k is string => Boolean(k));
 
-if (keys.length === 0) {
+if (allKeys.length === 0) {
   throw new Error("No GEMINI_KEY_* env vars found");
 }
+
+// The free rotation pool deliberately excludes GEMINI_KEY_1: that key is on a
+// paid Tier 1 project, so free-tier work (resume parse + ATS scoring) landing
+// on it would bill the paid project. Embeddings and chat use KEY_1 explicitly
+// via getTier1Key(); everything else rotates over KEY_2..KEY_8.
+// Fallback: if KEY_1 is the only key configured, use it so the app still runs.
+const freeKeys = allKeys.filter((k) => k !== process.env.GEMINI_KEY_1);
+const keys = freeKeys.length > 0 ? freeKeys : allKeys;
 
 let index = 0;
 const cooldowns = new Map<number, number>();
@@ -332,143 +349,30 @@ export type StreamGeminiOptions = {
   model?: string;
 };
 
-// Retry behaviour mirrors withGeminiKey: rotate keys + backoff on
-// 429/5xx/network until the stream opens. Once data starts flowing,
-// mid-stream failures terminate the iterator — recovery would require
-// re-sending the full prompt under a new key, which loses partial output
-// and is not worth the complexity at v1.
+// Chat runs on the paid Tier 1 key through the Vercel AI SDK rather than the
+// free rotation: a live conversation can't tolerate the rotation's "all keys
+// cooling, retry in 60s" stalls. We map the GeminiContent history onto AI SDK
+// ModelMessages and hand back the raw text-delta stream; the caller owns
+// persistence and client framing. Per the textStream contract, a mid-stream
+// failure throws into the consumer (the route pump), which surfaces it.
 export async function streamGemini(
   contents: GeminiContent[],
   opts: StreamGeminiOptions = {}
 ): Promise<AsyncIterable<string>> {
   const model = opts.model ?? DEFAULT_MODEL;
-  const temperature = opts.temperature ?? 0.7;
-  const body = JSON.stringify({
-    contents,
-    generationConfig: { temperature },
-    ...(opts.systemInstruction
-      ? { systemInstruction: { parts: [{ text: opts.systemInstruction }] } }
-      : {}),
+  const google = createGoogleGenerativeAI({ apiKey: getTier1Key() });
+
+  const messages: ModelMessage[] = contents.map((c) => ({
+    role: c.role === "model" ? "assistant" : "user",
+    content: c.parts.map((p) => p.text).join(""),
+  }));
+
+  const result = streamText({
+    model: google(model),
+    messages,
+    temperature: opts.temperature ?? 0.7,
+    ...(opts.systemInstruction ? { system: opts.systemInstruction } : {}),
   });
 
-  let lastError: GeminiError | null = null;
-
-  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-    const picked = pickFreshKey();
-    if (!picked) {
-      throw new GeminiError(
-        "All Gemini keys are rate-limited. Try again in 60s.",
-        429,
-        true
-      );
-    }
-
-    let res: Response;
-    try {
-      res = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse&key=${picked.key}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body,
-        }
-      );
-    } catch (err) {
-      lastError = new GeminiError(
-        err instanceof Error ? err.message : "Network error",
-        0,
-        true
-      );
-      if (attempt < MAX_ATTEMPTS - 1) await sleep(backoffMs(attempt));
-      continue;
-    }
-
-    if (res.ok && res.body) {
-      return parseSSEStream(res.body);
-    }
-
-    const detail = await res.text().catch(() => "");
-    const snippet = detail.slice(0, 200);
-
-    if (res.status === 429) {
-      markCooldown(picked.key);
-      lastError = new GeminiError(
-        "Gemini rate-limited, please retry in 60s",
-        429,
-        true
-      );
-      if (attempt < MAX_ATTEMPTS - 1) await sleep(backoffMs(attempt));
-      continue;
-    }
-
-    if (res.status === 500 || res.status === 503) {
-      lastError = new GeminiError(
-        `Gemini temporarily unavailable (${res.status})${snippet ? `: ${snippet}` : ""}`,
-        res.status,
-        true
-      );
-      if (attempt < MAX_ATTEMPTS - 1) await sleep(backoffMs(attempt));
-      continue;
-    }
-
-    if (res.status >= 400 && res.status < 500) {
-      throw new GeminiError(
-        `Gemini error ${res.status}${snippet ? `: ${snippet}` : ""}`,
-        res.status,
-        false
-      );
-    }
-
-    lastError = new GeminiError(
-      `Gemini error ${res.status}${snippet ? `: ${snippet}` : ""}`,
-      res.status,
-      true
-    );
-    if (attempt < MAX_ATTEMPTS - 1) await sleep(backoffMs(attempt));
-  }
-
-  throw lastError ?? new GeminiError("Gemini stream failed", 502, true);
-}
-
-async function* parseSSEStream(
-  body: ReadableStream<Uint8Array>
-): AsyncGenerator<string, void, unknown> {
-  const reader = body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-
-      let sep = buffer.indexOf("\n\n");
-      while (sep !== -1) {
-        const eventBlock = buffer.slice(0, sep);
-        buffer = buffer.slice(sep + 2);
-
-        const dataLines = eventBlock
-          .split("\n")
-          .filter((l) => l.startsWith("data:"))
-          .map((l) => l.slice(5).trimStart());
-
-        sep = buffer.indexOf("\n\n");
-        if (dataLines.length === 0) continue;
-
-        const payload = dataLines.join("\n");
-        if (payload === "[DONE]") return;
-
-        try {
-          const obj = JSON.parse(payload) as GeminiResponse;
-          const text = obj.candidates?.[0]?.content?.parts?.[0]?.text;
-          if (text) yield text;
-        } catch {
-          // Skip malformed SSE chunks rather than failing the whole stream.
-        }
-      }
-    }
-  } finally {
-    reader.releaseLock();
-  }
+  return result.textStream;
 }

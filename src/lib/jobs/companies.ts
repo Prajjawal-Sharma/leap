@@ -2,8 +2,8 @@
 // Each slug must match the company's Greenhouse board path:
 // https://boards-api.greenhouse.io/v1/boards/{slug}/jobs
 //
-// Ordering doesn't affect correctness (the cron handler iterates this list
-// sequentially) but keep grouped by category for human review.
+// Ordering doesn't affect correctness (the ingest runner fetches these with
+// limited concurrency) but keep grouped by category for human review.
 export const GREENHOUSE_COMPANIES: string[] = [
   // Payments / fintech
   "stripe",

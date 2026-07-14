@@ -71,6 +71,11 @@ export type ParsedResume = z.infer<typeof ParsedResumeSchema>;
 const MAX_FINDINGS_ITEMS = 20;
 const MAX_FINDING_LEN = 300;
 const MAX_KEYWORDS_ITEMS = 50;
+// Distinct from MAX_SKILL (atomic skill names in ParsedResumeSchema):
+// keywords_missing suggestions from Gemini are sometimes full phrases —
+// observed up to 115 chars against a real resume — so 100 was too tight
+// and intermittently 502'd the score route.
+const MAX_KEYWORD_LEN = 200;
 const MAX_VERDICT_LEN = 1000;
 
 export const ResumeScoreAnalysisSchema = z.object({
@@ -84,7 +89,7 @@ export const ResumeScoreAnalysisSchema = z.object({
     .max(MAX_FINDINGS_ITEMS)
     .default([]),
   keywords_missing: z
-    .array(z.string().max(MAX_SKILL))
+    .array(z.string().max(MAX_KEYWORD_LEN))
     .max(MAX_KEYWORDS_ITEMS)
     .default([]),
   verdict: z.string().max(MAX_VERDICT_LEN).default(""),

@@ -50,6 +50,11 @@ async function findUnembeddedJobs(
     const { data: page, error: e1 } = await admin
       .from("job_embeddings")
       .select("job_id")
+      // .range() is LIMIT/OFFSET under the hood; without a deterministic sort
+      // the server may return rows in a different order per page, so a row can
+      // be skipped or seen twice as we walk offsets. job_id is the PK (unique),
+      // so ordering by it gives every page a stable, gap-free window.
+      .order("job_id")
       .range(embOffset, embOffset + PAGE_SIZE - 1);
     if (e1) {
       throw new Error(`fetch job_embeddings ids failed: ${e1.message}`);
@@ -68,7 +73,14 @@ async function findUnembeddedJobs(
       .select(
         "id, title, company, location, description, requirements, is_remote, employment_type"
       )
+      // ingested_at alone is NOT a stable sort key: the ingest cron upserts a
+      // whole batch in one statement, so every row in that batch shares the
+      // same now() timestamp. Ties break arbitrarily per query, which lets
+      // LIMIT/OFFSET pagination skip or repeat rows across pages — a skipped
+      // job is then never embedded, forever, while total_failed stays 0. id
+      // (PK, unique) is the tiebreaker that makes the ordering total.
       .order("ingested_at", { ascending: false })
+      .order("id")
       .range(offset, offset + PAGE_SIZE - 1);
     if (e2) {
       throw new Error(`fetch jobs page (offset=${offset}) failed: ${e2.message}`);
@@ -144,38 +156,31 @@ export async function runEmbedJobs(
   let totalEmbedded = 0;
   let totalFailed = 0;
 
-  // Hand the whole text array to embedBatch — it chunks at MAX_BATCH (100)
-  // internally and runs each chunk in sequence on the Tier 1 key. Per-batch
-  // errors are surfaced as exceptions, so we can localize failures by
-  // shadowing the chunking here at the runner level too.
-  const allTexts = valid.map((v) => v.text);
-  let vectors: number[][] = [];
-  try {
-    vectors = await embedBatch(allTexts);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : "unknown error";
-    console.error(`[embed-jobs] embedBatch failed:`, msg);
-    totalFailed = valid.length;
-    return {
-      ok: false,
-      duration_ms: Date.now() - startedAt,
-      total_processed: jobs.length,
-      total_embedded: 0,
-      total_skipped: skipped,
-      total_failed: totalFailed,
-      jobs_remaining: await countRemaining(admin),
-    };
-  }
+  // Process at the runner level in fixed chunks so one bad chunk — whether the
+  // Gemini embed call throws or the PostgREST upsert errors — is isolated to
+  // its own ~100 jobs instead of zeroing the whole run. We embed a chunk, then
+  // immediately write it, before touching the next chunk: partial progress is
+  // durable, so a failure several chunks in still leaves the earlier chunks
+  // embedded and counted. (embedBatch also chunks at MAX_BATCH=100 internally,
+  // so a RUNNER_CHUNK-sized slice maps to exactly one Gemini batch request.)
+  const RUNNER_CHUNK = 100;
+  for (let i = 0; i < valid.length; i += RUNNER_CHUNK) {
+    const chunkNum = Math.floor(i / RUNNER_CHUNK) + 1;
+    const sliceJobs = valid.slice(i, i + RUNNER_CHUNK);
 
-  // Insert in DB-friendly chunks so a 500-row batch doesn't make one massive
-  // PostgREST request. 100 rows × 768 floats ≈ 300KB — comfortable.
-  const DB_CHUNK = 100;
-  for (let i = 0; i < valid.length; i += DB_CHUNK) {
-    const chunkNum = Math.floor(i / DB_CHUNK) + 1;
-    const sliceJobs = valid.slice(i, i + DB_CHUNK);
+    let vectors: number[][];
+    try {
+      vectors = await embedBatch(sliceJobs.map((s) => s.text));
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "unknown error";
+      console.error(`[embed-jobs] chunk ${chunkNum} embed failed:`, msg);
+      totalFailed += sliceJobs.length;
+      continue;
+    }
+
     const rows = sliceJobs.map((s, idx) => ({
       job_id: s.job.id,
-      embedding: vectors[i + idx],
+      embedding: vectors[idx],
     }));
 
     console.log(

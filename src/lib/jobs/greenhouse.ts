@@ -31,13 +31,12 @@ type GreenhouseResponse = {
 const COMPANY_OVERRIDES: Record<string, string> = {
   stripe: "Stripe",
   airbnb: "Airbnb",
-  shopify: "Shopify",
   figma: "Figma",
   gitlab: "GitLab",
-  hashicorp: "HashiCorp",
   mongodb: "MongoDB",
-  datadoghq: "Datadog",
-  doordash: "DoorDash",
+  // Board slug is "doordashusa" but the brand (and any future rows from other
+  // regional boards) should read plain "DoorDash".
+  doordashusa: "DoorDash",
 };
 
 export function humanizeCompany(slug: string): string {

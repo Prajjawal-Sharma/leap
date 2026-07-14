@@ -4,34 +4,36 @@
 //
 // Ordering doesn't affect correctness (the ingest runner fetches these with
 // limited concurrency) but keep grouped by category for human review.
+//
+// 2026-07-14 audit: every slug probed against the live boards API. Seven of
+// the original 25 had never returned a job. Removed the five whose companies
+// left Greenhouse — plaid, shopify, notion (now on Ashby), hashicorp (IBM
+// careers portal post-acquisition), retool (no public board found) — and
+// renamed doordash -> doordashusa (462 jobs) and datadoghq -> datadog
+// (422 jobs), both verified live.
 export const GREENHOUSE_COMPANIES: string[] = [
   // Payments / fintech
   "stripe",
   "robinhood",
-  "plaid",
   "monzo",
   "brex",
   "gusto",
   // Consumer / marketplace
   "airbnb",
-  "shopify",
-  "doordash",
+  "doordashusa",
   "instacart",
   "pinterest",
   // Dev tools / infra
   "cloudflare",
   "gitlab",
   "vercel",
-  "hashicorp",
   "mongodb",
-  "datadoghq",
+  "datadog",
   "twilio",
   // Productivity / SaaS
   "figma",
-  "notion",
   "asana",
   "dropbox",
   "squarespace",
   "mixpanel",
-  "retool",
 ];

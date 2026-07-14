@@ -6,6 +6,7 @@ import { PDFParse } from "pdf-parse";
 import { NextResponse, type NextRequest } from "next/server";
 
 import { callGemini, GeminiError } from "@/lib/ai/gemini-client";
+import { ParsedResumeSchema, type ParsedResume } from "@/lib/ai/schemas";
 import { createAdminSupabase } from "@/lib/supabase-admin";
 import { createServerSupabase } from "@/lib/supabase-server";
 
@@ -126,10 +127,25 @@ export async function POST(request: NextRequest) {
     (trimmed.length > MAX_CHARS ? trimmed.slice(0, MAX_CHARS) : trimmed) +
     '\n"""';
 
-  let parsedContent: Record<string, unknown>;
+  let parsedContent: ParsedResume;
   try {
     const raw = await callGemini(promptText, { temperature: 0.2 });
-    parsedContent = JSON.parse(stripFences(raw));
+    const rawJson: unknown = JSON.parse(stripFences(raw));
+    const validated = ParsedResumeSchema.safeParse(rawJson);
+    if (!validated.success) {
+      console.error(
+        `[resume/parse] schema validation failed for resume ${resumeId}:`,
+        validated.error.message
+      );
+      return NextResponse.json(
+        {
+          error: "Gemini returned a malformed resume payload",
+          retryable: true,
+        },
+        { status: 502 }
+      );
+    }
+    parsedContent = validated.data;
   } catch (err) {
     if (err instanceof GeminiError) {
       const status = err.status === 429 ? 429 : 502;

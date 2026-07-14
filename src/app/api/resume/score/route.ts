@@ -1,6 +1,10 @@
 import { NextResponse, type NextRequest } from "next/server";
 
 import { callGemini, GeminiError } from "@/lib/ai/gemini-client";
+import {
+  ResumeScoreAnalysisSchema,
+  type ResumeScoreAnalysis,
+} from "@/lib/ai/schemas";
 import { createServerSupabase } from "@/lib/supabase-server";
 
 export const runtime = "nodejs";
@@ -23,14 +27,6 @@ type ParsedResume = {
   skills?: string[];
   certifications?: unknown[];
   _resume_text?: string;
-};
-
-type GeminiAnalysis = {
-  score?: number;
-  strengths?: string[];
-  improvements?: string[];
-  keywords_missing?: string[];
-  verdict?: string;
 };
 
 const stripFences = (s: string) =>
@@ -169,12 +165,27 @@ export async function POST(request: NextRequest) {
       ? sourceForGemini.slice(0, MAX_CHARS)
       : sourceForGemini;
 
-  let geminiAnalysis: GeminiAnalysis;
+  let geminiAnalysis: ResumeScoreAnalysis;
   try {
     const raw = await callGemini(SCORE_PROMPT + promptInput + '\n"""', {
       temperature: 0.3,
     });
-    geminiAnalysis = JSON.parse(stripFences(raw));
+    const rawJson: unknown = JSON.parse(stripFences(raw));
+    const validated = ResumeScoreAnalysisSchema.safeParse(rawJson);
+    if (!validated.success) {
+      console.error(
+        `[resume/score] schema validation failed for resume ${resumeId}:`,
+        validated.error.message
+      );
+      return NextResponse.json(
+        {
+          error: "Gemini returned a malformed score payload",
+          retryable: true,
+        },
+        { status: 502 }
+      );
+    }
+    geminiAnalysis = validated.data;
   } catch (err) {
     if (err instanceof GeminiError) {
       const status = err.status === 429 ? 429 : 502;

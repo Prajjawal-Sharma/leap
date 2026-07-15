@@ -16,6 +16,11 @@ export default function JobFeed({ initialMatches, totalSearched }: Props) {
   const [appsByJobId, setAppsByJobId] = useState<
     Map<string, ApplicationWithJob>
   >(() => new Map());
+  // job_id → stored tailored resume id, so cards reflect an already-kept
+  // tailored resume after a reload.
+  const [tailoredByJobId, setTailoredByJobId] = useState<Map<string, string>>(
+    () => new Map()
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -37,6 +42,24 @@ export default function JobFeed({ initialMatches, totalSearched }: Props) {
         // POST is idempotent so the worst case is one wasted insert attempt.
       }
     })();
+    (async () => {
+      try {
+        const res = await fetch("/api/resume/tailor", { cache: "no-store" });
+        if (!res.ok) return; // best-effort, same as applications above
+        const data = (await res.json()) as {
+          tailored: Array<{ id: string; job_id: string | null }>;
+        };
+        if (cancelled) return;
+        const next = new Map<string, string>();
+        for (const t of data.tailored ?? []) {
+          if (t.job_id) next.set(t.job_id, t.id);
+        }
+        setTailoredByJobId(next);
+      } catch {
+        // Best-effort — tailoring still works, the card just starts from the
+        // "not yet tailored" label and the POST is idempotent server-side.
+      }
+    })();
     return () => {
       cancelled = true;
     };
@@ -51,6 +74,18 @@ export default function JobFeed({ initialMatches, totalSearched }: Props) {
     });
   };
 
+  const handleTailoredChange = (jobId: string, resumeId: string | null) => {
+    setTailoredByJobId((prev) => {
+      const next = new Map(prev);
+      if (resumeId) {
+        next.set(jobId, resumeId);
+      } else {
+        next.delete(jobId);
+      }
+      return next;
+    });
+  };
+
   return (
     <div className="mt-6 space-y-4">
       <p className="text-xs text-neutral-500">
@@ -59,18 +94,23 @@ export default function JobFeed({ initialMatches, totalSearched }: Props) {
       <div className="grid gap-4">
         {initialMatches.map((m) => {
           const existing = appsByJobId.get(m.job.id) ?? null;
+          const tailoredId = tailoredByJobId.get(m.job.id) ?? null;
           // Compound key — when an application is created or its status
-          // transitions, the id-or-status changes and JobCard remounts with
-          // the fresh prop, so it never holds stale optimistic state.
-          const cardKey = existing
-            ? `app-${existing.id}-${existing.status}`
-            : `job-${m.job.id}`;
+          // transitions (or a tailored resume is kept/discarded), the key
+          // changes and JobCard remounts with the fresh prop, so it never
+          // holds stale optimistic state.
+          const cardKey = [
+            existing ? `app-${existing.id}-${existing.status}` : `job-${m.job.id}`,
+            tailoredId ? `t-${tailoredId}` : "t-none",
+          ].join("-");
           return (
             <JobCard
               key={cardKey}
               match={m}
               existingApplication={existing}
               onApplicationChange={handleApplicationChange}
+              existingTailoredResumeId={tailoredId}
+              onTailoredChange={handleTailoredChange}
             />
           );
         })}

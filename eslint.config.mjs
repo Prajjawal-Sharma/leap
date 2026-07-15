@@ -12,6 +12,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Local CommonJS ops helper (manual job re-ingest), not app code.
+    "ingest.js",
   ]),
 ]);
 

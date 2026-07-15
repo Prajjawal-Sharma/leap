@@ -81,6 +81,15 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
+  // Generated tailored resumes have no stored PDF (storage_path is null
+  // since migration 0006) — there is nothing to download and parse.
+  if (!resume.storage_path) {
+    return NextResponse.json(
+      { error: "Resume has no stored file to parse" },
+      { status: 409 }
+    );
+  }
+
   const admin = createAdminSupabase();
   const { data: blob, error: downloadError } = await admin.storage
     .from(BUCKET)

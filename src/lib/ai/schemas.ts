@@ -96,3 +96,16 @@ export const ResumeScoreAnalysisSchema = z.object({
 });
 
 export type ResumeScoreAnalysis = z.infer<typeof ResumeScoreAnalysisSchema>;
+
+// One-Click Tailored Resume — /api/resume/tailor asks Gemini to rewrite the
+// primary resume against a job description and JSON.parses the reply, so it
+// is a Gemini JSON output site with the same safeParse boundary as
+// parse/score above. The tailored payload is deliberately the SAME shape as
+// ParsedResume: every existing consumer (chat-context formatter,
+// match-engine query builder, resume renderers) can then consume it
+// unchanged, and the caps above are already sized to real resume content.
+// Aliasing rather than copying means the shapes can never drift apart; if
+// tailoring ever needs extra fields, extend ParsedResumeSchema here instead.
+export const TailoredResumeSchema = ParsedResumeSchema;
+
+export type TailoredResume = ParsedResume;

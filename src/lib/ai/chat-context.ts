@@ -150,6 +150,9 @@ export async function buildSystemPrompt(
       .select("parsed_content")
       .eq("user_id", userId)
       .eq("is_primary", true)
+      // Never let a generated tailored resume masquerade as the user's real
+      // one in chat context, even if one ever ends up flagged primary.
+      .eq("kind", "uploaded")
       .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle(),

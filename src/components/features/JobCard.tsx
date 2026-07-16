@@ -24,9 +24,11 @@ type Props = {
   match: MatchResult;
   existingApplication?: JobCardApplication | null;
   onApplicationChange?: (application: ApplicationWithJob) => void;
-  // Id of an already-stored tailored resume for this job (from the parent's
-  // /api/resume/tailor fetch), or null. Same remount-via-key contract as
-  // existingApplication.
+  // Id of the stored tailored resume for this job (from the parent's
+  // /api/resume/tailor fetch plus our own onTailoredChange notifications),
+  // or null. Unlike existingApplication this is NOT part of the card key —
+  // updates flow through as ordinary prop changes so an in-flight tailor
+  // request or open preview modal survives them.
   existingTailoredResumeId?: string | null;
   onTailoredChange?: (jobId: string, resumeId: string | null) => void;
 };
@@ -35,12 +37,16 @@ type TailorResponse = {
   id: string;
   original: ParsedResume;
   tailored: ParsedResume;
+  updated: boolean;
 };
 
 type TailorPreview = {
   resumeId: string;
   original: ParsedResume;
   tailored: ParsedResume;
+  // True when generation overwrote an already-stored tailored resume —
+  // the modal warns that the previous version is gone.
+  wasUpdate: boolean;
 };
 
 function pillClasses(score: number): string {
@@ -122,9 +128,14 @@ export default function JobCard({
 
   // Tailored-resume flow. The row is persisted server-side at generation
   // time; the modal's Keep just closes the preview, Discard deletes the row.
-  const [tailoredId, setTailoredId] = useState<string | null>(
-    existingTailoredResumeId
-  );
+  // Displayed id is the prop (parent map = server truth) unless a local
+  // interaction has overridden it — undefined means "no override yet", so
+  // late GET hydration in the parent still flows through.
+  const [tailoredOverride, setTailoredOverride] = useState<
+    string | null | undefined
+  >(undefined);
+  const tailoredId =
+    tailoredOverride !== undefined ? tailoredOverride : existingTailoredResumeId;
   const [tailoring, setTailoring] = useState(false);
   const [tailorError, setTailorError] = useState<string | null>(null);
   const [tailorPreview, setTailorPreview] = useState<TailorPreview | null>(null);
@@ -261,7 +272,14 @@ export default function JobCard({
         resumeId: data.id,
         original: data.original,
         tailored: data.tailored,
+        wasUpdate: data.updated,
       });
+      // The row exists server-side from this moment — tell the parent NOW,
+      // not on Keep, so even if something remounts this card (e.g. a save
+      // transitioning the application key) the surviving instance still
+      // reflects the stored row instead of lying about it.
+      setTailoredOverride(data.id);
+      onTailoredChange?.(job.id, data.id);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Tailoring failed";
       setTailorError(msg);
@@ -270,12 +288,11 @@ export default function JobCard({
     }
   };
 
+  // The parent was already notified at generation time — Keep just
+  // dismisses the preview.
   const handleTailorKeep = () => {
-    if (!tailorPreview) return;
-    setTailoredId(tailorPreview.resumeId);
     setTailorPreview(null);
     setDiscardError(null);
-    onTailoredChange?.(job.id, tailorPreview.resumeId);
   };
 
   const handleTailorDiscard = async () => {
@@ -293,7 +310,7 @@ export default function JobCard({
         throw new Error(body.error ?? `Discard failed (${res.status})`);
       }
       setTailorPreview(null);
-      setTailoredId(null);
+      setTailoredOverride(null);
       onTailoredChange?.(job.id, null);
     } catch (err) {
       // Keep the modal open with the error — the row still exists, so
@@ -377,7 +394,7 @@ export default function JobCard({
         <button
           type="button"
           onClick={handleTailor}
-          disabled={tailoring}
+          disabled={tailoring || saving}
           title="Rewrite your primary resume to target this job"
           className="mr-auto inline-flex items-center gap-1.5 rounded-md bg-white/5 hover:bg-white/10 px-3 py-2 text-sm font-medium text-neutral-100 ring-1 ring-white/10 transition disabled:opacity-70"
         >
@@ -398,7 +415,10 @@ export default function JobCard({
         <button
           type="button"
           onClick={handleSave}
-          disabled={saving || hasApplication}
+          // Also locked during tailoring: a save transitions the card key
+          // and remounts this component, which would orphan the in-flight
+          // tailor request's preview.
+          disabled={saving || hasApplication || tailoring}
           className={[
             "inline-flex items-center gap-1.5 rounded-md px-3 py-2 text-sm font-medium ring-1 transition",
             hasApplication
@@ -446,6 +466,7 @@ export default function JobCard({
           company={company}
           original={tailorPreview.original}
           tailored={tailorPreview.tailored}
+          wasUpdate={tailorPreview.wasUpdate}
           discarding={discarding}
           error={discardError}
           onKeep={handleTailorKeep}

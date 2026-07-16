@@ -33,3 +33,11 @@ alter table public.resumes
 
 create index if not exists resumes_user_kind_idx
   on public.resumes (user_id, kind);
+
+-- The tailor route promises at most one tailored row per (user, job) via
+-- select-then-upsert; this partial unique index is the DB backstop for the
+-- race two concurrent generations can hit. Uploaded rows are exempt (their
+-- job_id is null anyway). The route maps 23505 back onto its update path.
+create unique index if not exists resumes_tailored_user_job_uidx
+  on public.resumes (user_id, job_id)
+  where kind = 'tailored';

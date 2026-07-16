@@ -96,13 +96,15 @@ export default function JobFeed({ initialMatches, totalSearched }: Props) {
           const existing = appsByJobId.get(m.job.id) ?? null;
           const tailoredId = tailoredByJobId.get(m.job.id) ?? null;
           // Compound key — when an application is created or its status
-          // transitions (or a tailored resume is kept/discarded), the key
-          // changes and JobCard remounts with the fresh prop, so it never
-          // holds stale optimistic state.
-          const cardKey = [
-            existing ? `app-${existing.id}-${existing.status}` : `job-${m.job.id}`,
-            tailoredId ? `t-${tailoredId}` : "t-none",
-          ].join("-");
+          // transitions, the id-or-status changes and JobCard remounts with
+          // the fresh prop, so it never holds stale optimistic state.
+          // Deliberately NOT keyed on tailoredId: the tailored map updates
+          // while a generation is in flight or its preview modal is open,
+          // and a remount would destroy both. JobCard consumes tailored
+          // updates as plain prop changes instead.
+          const cardKey = existing
+            ? `app-${existing.id}-${existing.status}`
+            : `job-${m.job.id}`;
           return (
             <JobCard
               key={cardKey}

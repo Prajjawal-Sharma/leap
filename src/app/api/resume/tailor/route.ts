@@ -26,6 +26,20 @@ const MAX_JOB_FIELD = 200;
 const truncate = (s: string, n: number): string =>
   s.length > n ? `${s.slice(0, n).trim()}…` : s;
 
+// job_id / resume_id hit uuid columns — reject non-UUIDs up front so a
+// hand-crafted body gets a 400 instead of a 500 with a raw Postgres
+// cast error (22P02).
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// A fence is only as strong as its markers: fenced text containing its own
+// "=== ... ===" line could forge an END marker and plant everything after
+// it OUTSIDE the data fence, where it reads with instruction authority.
+// Collapsing every run of 3+ '=' makes forming a marker line impossible
+// while leaving the content readable (and JSON-safe — it only ever touches
+// string contents).
+const neutralizeFenceMarkers = (s: string): string => s.replace(/={3,}/g, "==");
+
 const stripFences = (s: string) =>
   s
     .trim()
@@ -80,14 +94,14 @@ function buildTailorPrompt(
     DATA_FENCE_GUARD,
     "",
     BEGIN_RESUME,
-    JSON.stringify(original, null, 2),
+    neutralizeFenceMarkers(JSON.stringify(original, null, 2)),
     END_RESUME,
     "",
     BEGIN_JOB,
-    `Title: ${truncate(job.title, MAX_JOB_FIELD)}`,
-    `Company: ${truncate(job.company, MAX_JOB_FIELD)}`,
+    `Title: ${neutralizeFenceMarkers(truncate(job.title, MAX_JOB_FIELD))}`,
+    `Company: ${neutralizeFenceMarkers(truncate(job.company, MAX_JOB_FIELD))}`,
     "",
-    truncate(jobText, MAX_JD_CHARS),
+    neutralizeFenceMarkers(truncate(jobText, MAX_JD_CHARS)),
     END_JOB,
   ].join("\n");
 }
@@ -110,8 +124,11 @@ export async function POST(request: NextRequest) {
   }
 
   const jobId = typeof body.job_id === "string" ? body.job_id.trim() : "";
-  if (!jobId) {
-    return NextResponse.json({ error: "job_id is required" }, { status: 400 });
+  if (!jobId || !UUID_RE.test(jobId)) {
+    return NextResponse.json(
+      { error: "job_id must be a job UUID" },
+      { status: 400 }
+    );
   }
 
   // Primary uploaded resume. kind='uploaded' on top of is_primary=true is
@@ -242,16 +259,21 @@ export async function POST(request: NextRequest) {
 
   const existing = existingRows?.[0] ?? null;
   let resumeId: string;
+  let wasUpdate = Boolean(existing);
 
-  if (existing) {
+  const updateExisting = async (id: string): Promise<string | null> => {
     const { error: updateErr } = await supabase
       .from("resumes")
       .update({ parsed_content: tailored })
-      .eq("id", existing.id)
+      .eq("id", id)
       .eq("user_id", user.id);
+    return updateErr ? updateErr.message : null;
+  };
 
-    if (updateErr) {
-      return NextResponse.json({ error: updateErr.message }, { status: 500 });
+  if (existing) {
+    const updateFailure = await updateExisting(existing.id);
+    if (updateFailure) {
+      return NextResponse.json({ error: updateFailure }, { status: 500 });
     }
     resumeId = existing.id;
   } else {
@@ -267,13 +289,40 @@ export async function POST(request: NextRequest) {
       .select("id")
       .single();
 
-    if (insertErr || !inserted) {
+    if (insertErr?.code === "23505") {
+      // A concurrent tailor for the same (user, job) won the insert — the
+      // partial unique index (migration 0006) backstops the idempotency
+      // contract. Recover by updating the winner's row.
+      const { data: winnerRows, error: winnerErr } = await supabase
+        .from("resumes")
+        .select("id")
+        .eq("user_id", user.id)
+        .eq("kind", "tailored")
+        .eq("job_id", job.id)
+        .order("created_at", { ascending: false })
+        .limit(1);
+
+      const winner = winnerRows?.[0] ?? null;
+      if (winnerErr || !winner) {
+        return NextResponse.json(
+          { error: winnerErr?.message ?? "Concurrent tailor conflict" },
+          { status: 500 }
+        );
+      }
+      const updateFailure = await updateExisting(winner.id);
+      if (updateFailure) {
+        return NextResponse.json({ error: updateFailure }, { status: 500 });
+      }
+      resumeId = winner.id;
+      wasUpdate = true;
+    } else if (insertErr || !inserted) {
       return NextResponse.json(
         { error: insertErr?.message ?? "Insert failed" },
         { status: 500 }
       );
+    } else {
+      resumeId = inserted.id;
     }
-    resumeId = inserted.id;
   }
 
   return NextResponse.json(
@@ -284,9 +333,9 @@ export async function POST(request: NextRequest) {
       job_company: job.company,
       original,
       tailored,
-      updated: Boolean(existing),
+      updated: wasUpdate,
     },
-    { status: existing ? 200 : 201, headers: { "Cache-Control": "no-store" } }
+    { status: wasUpdate ? 200 : 201, headers: { "Cache-Control": "no-store" } }
   );
 }
 
@@ -343,9 +392,9 @@ export async function DELETE(request: NextRequest) {
 
   const resumeId =
     typeof body.resume_id === "string" ? body.resume_id.trim() : "";
-  if (!resumeId) {
+  if (!resumeId || !UUID_RE.test(resumeId)) {
     return NextResponse.json(
-      { error: "resume_id is required" },
+      { error: "resume_id must be a resume UUID" },
       { status: 400 }
     );
   }

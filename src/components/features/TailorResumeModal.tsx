@@ -10,6 +10,10 @@ type Props = {
   company: string;
   original: ParsedResume;
   tailored: ParsedResume;
+  // True when this generation overwrote an already-stored tailored resume —
+  // the previous version is gone, and Discard removes the stored row
+  // entirely. Surfaced so those consequences aren't silent.
+  wasUpdate: boolean;
   discarding: boolean;
   error: string | null;
   // Keep = close the preview and leave the stored tailored resume in place.
@@ -118,6 +122,7 @@ export default function TailorResumeModal({
   company,
   original,
   tailored,
+  wasUpdate,
   discarding,
   error,
   onKeep,
@@ -197,7 +202,13 @@ export default function TailorResumeModal({
           </div>
         </div>
 
-        <footer className="flex items-center gap-3 border-t border-white/10 px-5 py-4">
+        <footer className="flex flex-wrap items-center gap-3 border-t border-white/10 px-5 py-4">
+          {wasUpdate && !error && (
+            <p className="flex-1 min-w-0 basis-full sm:basis-0 text-xs text-neutral-400">
+              This rewrite replaced your previous tailored version. Discard
+              deletes the stored tailored resume for this job entirely.
+            </p>
+          )}
           {error && (
             <p className="flex-1 text-xs text-red-300 min-w-0">{error}</p>
           )}

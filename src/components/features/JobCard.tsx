@@ -2,6 +2,8 @@
 
 import { useState } from "react";
 
+import TailorResumeModal from "@/components/features/TailorResumeModal";
+import type { ParsedResume } from "@/lib/ai/schemas";
 import type { MatchResult } from "@/lib/jobs/match-engine";
 import type {
   ApplicationStatus,
@@ -22,6 +24,29 @@ type Props = {
   match: MatchResult;
   existingApplication?: JobCardApplication | null;
   onApplicationChange?: (application: ApplicationWithJob) => void;
+  // Id of the stored tailored resume for this job (from the parent's
+  // /api/resume/tailor fetch plus our own onTailoredChange notifications),
+  // or null. Unlike existingApplication this is NOT part of the card key —
+  // updates flow through as ordinary prop changes so an in-flight tailor
+  // request or open preview modal survives them.
+  existingTailoredResumeId?: string | null;
+  onTailoredChange?: (jobId: string, resumeId: string | null) => void;
+};
+
+type TailorResponse = {
+  id: string;
+  original: ParsedResume;
+  tailored: ParsedResume;
+  updated: boolean;
+};
+
+type TailorPreview = {
+  resumeId: string;
+  original: ParsedResume;
+  tailored: ParsedResume;
+  // True when generation overwrote an already-stored tailored resume —
+  // the modal warns that the previous version is gone.
+  wasUpdate: boolean;
 };
 
 function pillClasses(score: number): string {
@@ -80,6 +105,8 @@ export default function JobCard({
   match,
   existingApplication = null,
   onApplicationChange,
+  existingTailoredResumeId = null,
+  onTailoredChange,
 }: Props) {
   const { job, match_score } = match;
   const title = job.title?.trim() || "Untitled role";
@@ -98,6 +125,22 @@ export default function JobCard({
   );
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Tailored-resume flow. The row is persisted server-side at generation
+  // time; the modal's Keep just closes the preview, Discard deletes the row.
+  // Displayed id is the prop (parent map = server truth) unless a local
+  // interaction has overridden it — undefined means "no override yet", so
+  // late GET hydration in the parent still flows through.
+  const [tailoredOverride, setTailoredOverride] = useState<
+    string | null | undefined
+  >(undefined);
+  const tailoredId =
+    tailoredOverride !== undefined ? tailoredOverride : existingTailoredResumeId;
+  const [tailoring, setTailoring] = useState(false);
+  const [tailorError, setTailorError] = useState<string | null>(null);
+  const [tailorPreview, setTailorPreview] = useState<TailorPreview | null>(null);
+  const [discarding, setDiscarding] = useState(false);
+  const [discardError, setDiscardError] = useState<string | null>(null);
 
   const hasApplication = optimisticApp !== null;
   const isSavedOnly = optimisticApp?.status === "saved";
@@ -209,6 +252,76 @@ export default function JobCard({
     })();
   };
 
+  const handleTailor = async () => {
+    if (tailoring) return;
+    setTailorError(null);
+    setDiscardError(null);
+    setTailoring(true);
+    try {
+      const res = await fetch("/api/resume/tailor", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ job_id: job.id }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error ?? `Tailoring failed (${res.status})`);
+      }
+      const data = (await res.json()) as TailorResponse;
+      setTailorPreview({
+        resumeId: data.id,
+        original: data.original,
+        tailored: data.tailored,
+        wasUpdate: data.updated,
+      });
+      // The row exists server-side from this moment — tell the parent NOW,
+      // not on Keep, so even if something remounts this card (e.g. a save
+      // transitioning the application key) the surviving instance still
+      // reflects the stored row instead of lying about it.
+      setTailoredOverride(data.id);
+      onTailoredChange?.(job.id, data.id);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Tailoring failed";
+      setTailorError(msg);
+    } finally {
+      setTailoring(false);
+    }
+  };
+
+  // The parent was already notified at generation time — Keep just
+  // dismisses the preview.
+  const handleTailorKeep = () => {
+    setTailorPreview(null);
+    setDiscardError(null);
+  };
+
+  const handleTailorDiscard = async () => {
+    if (!tailorPreview || discarding) return;
+    setDiscarding(true);
+    setDiscardError(null);
+    try {
+      const res = await fetch("/api/resume/tailor", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ resume_id: tailorPreview.resumeId }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error ?? `Discard failed (${res.status})`);
+      }
+      setTailorPreview(null);
+      setTailoredOverride(null);
+      onTailoredChange?.(job.id, null);
+    } catch (err) {
+      // Keep the modal open with the error — the row still exists, so
+      // silently closing would leave the UI lying about what's stored.
+      const msg = err instanceof Error ? err.message : "Discard failed";
+      setDiscardError(msg);
+    } finally {
+      setDiscarding(false);
+    }
+  };
+
   return (
     <article className="rounded-xl bg-neutral-900/60 ring-1 ring-white/10 p-5 hover:ring-white/20 transition">
       <header className="flex items-start justify-between gap-4">
@@ -257,6 +370,11 @@ export default function JobCard({
             {appliedBadgeText(optimisticApp)}
           </span>
         )}
+        {tailoredId && (
+          <span className="rounded-md bg-[#6366f1]/15 ring-1 ring-[#6366f1]/30 px-2 py-1 text-indigo-200">
+            Resume tailored
+          </span>
+        )}
       </div>
 
       {preview && (
@@ -268,12 +386,39 @@ export default function JobCard({
       {error && (
         <p className="mt-2 text-xs text-red-300">{error}</p>
       )}
+      {tailorError && (
+        <p className="mt-2 text-xs text-red-300">{tailorError}</p>
+      )}
 
-      <div className="mt-4 flex items-center justify-end gap-2">
+      <div className="mt-4 flex flex-wrap items-center justify-end gap-2">
+        <button
+          type="button"
+          onClick={handleTailor}
+          disabled={tailoring || saving}
+          title="Rewrite your primary resume to target this job"
+          className="mr-auto inline-flex items-center gap-1.5 rounded-md bg-white/5 hover:bg-white/10 px-3 py-2 text-sm font-medium text-neutral-100 ring-1 ring-white/10 transition disabled:opacity-70"
+        >
+          {tailoring ? (
+            <>
+              <span
+                aria-hidden="true"
+                className="h-3.5 w-3.5 rounded-full border-2 border-white/20 border-t-[#6366f1] animate-spin"
+              />
+              Tailoring…
+            </>
+          ) : tailoredId ? (
+            "Re-tailor my resume"
+          ) : (
+            "Tailor my resume for this role"
+          )}
+        </button>
         <button
           type="button"
           onClick={handleSave}
-          disabled={saving || hasApplication}
+          // Also locked during tailoring: a save transitions the card key
+          // and remounts this component, which would orphan the in-flight
+          // tailor request's preview.
+          disabled={saving || hasApplication || tailoring}
           className={[
             "inline-flex items-center gap-1.5 rounded-md px-3 py-2 text-sm font-medium ring-1 transition",
             hasApplication
@@ -313,6 +458,21 @@ export default function JobCard({
           <span className="text-xs text-neutral-500">No apply link</span>
         )}
       </div>
+
+      {tailorPreview && (
+        <TailorResumeModal
+          open
+          jobTitle={title}
+          company={company}
+          original={tailorPreview.original}
+          tailored={tailorPreview.tailored}
+          wasUpdate={tailorPreview.wasUpdate}
+          discarding={discarding}
+          error={discardError}
+          onKeep={handleTailorKeep}
+          onDiscard={handleTailorDiscard}
+        />
+      )}
     </article>
   );
 }

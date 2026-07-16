@@ -96,3 +96,32 @@ export const ResumeScoreAnalysisSchema = z.object({
 });
 
 export type ResumeScoreAnalysis = z.infer<typeof ResumeScoreAnalysisSchema>;
+
+// One-Click Tailored Resume — /api/resume/tailor asks Gemini to rewrite the
+// primary resume against a job description and JSON.parses the reply, so it
+// is a Gemini JSON output site with the same safeParse boundary as
+// parse/score above. The tailored payload is deliberately the SAME shape as
+// ParsedResume: every existing consumer (chat-context formatter,
+// match-engine query builder, resume renderers) can then consume it
+// unchanged, and the caps above are already sized to real resume content.
+// Composing rather than copying means the shapes can never drift apart; if
+// tailoring ever needs extra fields, extend ParsedResumeSchema here instead.
+//
+// The refine exists because every ParsedResume field defaults: a degenerate
+// Gemini reply that is a JSON object but not a resume ({} after unknown-key
+// stripping — e.g. a refusal object or a {"resume": ...} wrapper) would
+// otherwise "validate" into an all-blank resume and be persisted as
+// success. A rewrite of a real resume always carries substance; a payload
+// with none is malformed output and must take the 502-retryable path.
+export const TailoredResumeSchema = ParsedResumeSchema.refine(
+  (r) =>
+    r.summary.trim().length > 0 ||
+    r.experience.length > 0 ||
+    r.skills.length > 0,
+  {
+    message:
+      "tailored payload has no resume content (summary, experience, and skills all empty)",
+  }
+);
+
+export type TailoredResume = ParsedResume;

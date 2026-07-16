@@ -132,7 +132,7 @@ export async function POST(request: NextRequest) {
 
   const { data: resume, error: fetchError } = await supabase
     .from("resumes")
-    .select("id, user_id, parsed_content")
+    .select("id, user_id, parsed_content, kind")
     .eq("id", resumeId)
     .single();
 
@@ -142,6 +142,16 @@ export async function POST(request: NextRequest) {
 
   if (resume.user_id !== user.id) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
+  // ATS scoring is an uploaded-resume concept — generated tailored rows
+  // have no _resume_text (skewing the heuristic) and nothing reads their
+  // ats_score. Mirrors the parse route's guard.
+  if (resume.kind !== "uploaded") {
+    return NextResponse.json(
+      { error: "Only uploaded resumes can be scored" },
+      { status: 409 }
+    );
   }
 
   if (!resume.parsed_content) {

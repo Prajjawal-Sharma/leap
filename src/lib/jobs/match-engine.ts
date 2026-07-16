@@ -113,12 +113,15 @@ export async function matchJobsForResume(
   // Defensive: a historical bug let multiple resumes carry is_primary=true
   // for the same user. .maybeSingle() raises on >1 row, so order by
   // created_at desc and take the first — works for 0, 1, or N primaries
-  // and naturally prefers the most recent upload.
+  // and naturally prefers the most recent upload. kind='uploaded' keeps
+  // generated tailored rows out of the match query even if one ever ends up
+  // flagged primary.
   const { data: resumeRows, error: resumeErr } = await supabase
     .from("resumes")
     .select("id, parsed_content")
     .eq("user_id", userId)
     .eq("is_primary", true)
+    .eq("kind", "uploaded")
     .order("created_at", { ascending: false })
     .limit(1);
 

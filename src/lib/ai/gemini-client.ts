@@ -139,7 +139,7 @@ const backoffMs = (attempt: number) =>
 
 type GeminiResponse = {
   candidates?: Array<{
-    content?: { parts?: Array<{ text?: string }> };
+    content?: { parts?: Array<{ text?: string; thought?: boolean }> };
   }>;
 };
 
@@ -220,6 +220,15 @@ export async function withGeminiKey<T>(
       try {
         return await parseSuccess(res);
       } catch (err) {
+        if (err instanceof GeminiError && err.retryable) {
+          // A retryable parse failure (e.g. structurally invalid JSON from
+          // a flaky model) — an independent resample usually succeeds, so
+          // spend an attempt instead of surfacing it to the caller.
+          lastError = err;
+          attempt++;
+          if (attempt < MAX_ATTEMPTS) await sleep(backoffMs(attempt - 1));
+          continue;
+        }
         if (err instanceof GeminiError) throw err;
         throw new GeminiError(
           err instanceof Error ? err.message : "parse failed",
@@ -413,10 +422,12 @@ function scheduleKeyAvailabilityCheck(model: string): void {
           }
         );
         if (res.status === 404) {
-          const detail = await res.text().catch(() => "");
+          const detail = (await res.text().catch(() => ""))
+            .replace(/\s+/g, " ")
+            .slice(0, 160);
           console.warn(
             `[gemini] availability check: ${name} cannot serve "${model}"${
-              detail ? ` — ${detail.slice(0, 160)}` : ""
+              detail ? ` — ${detail}` : ""
             }. Rotation skips such keys per call, but fix the key or model to restore full pool capacity.`
           );
         }
@@ -432,6 +443,21 @@ function scheduleKeyAvailabilityCheck(model: string): void {
 // ---------------------------------------------------------------------------
 // Free-tier multi-key path — parse / score / tailor
 // ---------------------------------------------------------------------------
+
+// gemini-3.x+ accepts thinkingConfig.thinkingLevel; older generations reject
+// it outright (2.5-flash: 400 "Thinking level is not supported for this
+// model"), so the knob must be gated by model generation.
+const supportsThinkingLevel = (model: string): boolean =>
+  /^gemini-(?:[3-9]|\d{2,})/.test(model);
+
+// Mirror of the routes' fence-stripping, used only for the validity check
+// above — the returned text stays raw.
+const stripJsonFences = (s: string): string =>
+  s
+    .trim()
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/```\s*$/i, "")
+    .trim();
 
 export async function callGemini(
   prompt: string,
@@ -453,15 +479,45 @@ export async function callGemini(
             generationConfig: {
               temperature,
               responseMimeType: "application/json",
+              // Without an explicit thinkingLevel, gemini-3.5-flash's JSON
+              // mode intermittently emits a truncated payload (finishReason
+              // STOP, single part, the closing brace missing) — observed
+              // 2026-07-18 at a ~30-40% rate across keys and prompt shapes,
+              // including with thinkingBudget:0. thinkingLevel "low" was
+              // 20/20 clean in the same harness. Cheaper AND more reliable
+              // for these structured parse/score/tailor tasks.
+              ...(supportsThinkingLevel(model)
+                ? { thinkingConfig: { thinkingLevel: "low" } }
+                : {}),
             },
           }),
         }
       ),
     async (res) => {
       const json = (await res.json()) as GeminiResponse;
-      const text = json.candidates?.[0]?.content?.parts?.[0]?.text;
+      // Join ALL non-thought parts, not parts[0] alone: gemini-3.5-flash
+      // intermittently splits one JSON answer across multiple parts
+      // (observed live 2026-07-18 — the tail part held just the closing
+      // brace, so reading parts[0] yielded unparseable JSON). Parts flagged
+      // thought:true are reasoning summaries, never answer text.
+      const text = (json.candidates?.[0]?.content?.parts ?? [])
+        .filter((p) => p.thought !== true)
+        .map((p) => p.text ?? "")
+        .join("");
       if (!text) {
         throw new GeminiError("Gemini returned no text", 502, false);
+      }
+      // callGemini is a JSON-only path (responseMimeType is always
+      // application/json), yet gemini-3.5-flash occasionally emits a
+      // truncated or trailing-garbage payload anyway (observed 2026-07-18,
+      // ~5-10% on some prompts, finishReason STOP). Malformed JSON is
+      // transient — a resample nearly always parses — so mark it retryable
+      // and let the rotation loop retry instead of 502ing the caller.
+      // Callers still parse the raw text themselves (incl. fence-stripping).
+      try {
+        JSON.parse(stripJsonFences(text));
+      } catch {
+        throw new GeminiError("Gemini returned malformed JSON", 502, true);
       }
       return text;
     },

@@ -6,7 +6,16 @@ import { PDFParse } from "pdf-parse";
 import { NextResponse, type NextRequest } from "next/server";
 
 import { callGemini, GeminiError } from "@/lib/ai/gemini-client";
-import { ParsedResumeSchema, type ParsedResume } from "@/lib/ai/schemas";
+import {
+  buildParseAndScorePrompt,
+  combineWithHeuristic,
+  computeHeuristic,
+} from "@/lib/ai/resume-analysis";
+import {
+  ResumeParseAndScoreSchema,
+  type ParsedResume,
+  type ResumeScoreAnalysis,
+} from "@/lib/ai/schemas";
 import { createAdminSupabase } from "@/lib/supabase-admin";
 import { createServerSupabase } from "@/lib/supabase-server";
 
@@ -14,26 +23,6 @@ export const runtime = "nodejs";
 export const maxDuration = 30;
 
 const BUCKET = "resumes";
-
-const PARSE_PROMPT = `You are a precise resume parser. Extract the following fields from the resume text and return ONLY valid JSON (no markdown fences, no commentary). Use empty string "" for missing string fields and empty arrays for missing list fields. Do not invent data.
-
-Schema:
-{
-  "full_name": string,
-  "email": string,
-  "phone": string,
-  "location": string,
-  "summary": string,
-  "experience": [{ "company": string, "role": string, "duration": string, "description": string }],
-  "education": [{ "institution": string, "degree": string, "year": string }],
-  "skills": string[],
-  "certifications": string[],
-  "languages": string[]
-}
-
-Resume text:
-"""
-`;
 
 const stripFences = (s: string) =>
   s
@@ -129,21 +118,23 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  // Cap input size to keep prompt lean and avoid runaway tokens.
-  const MAX_CHARS = 16000;
-  const promptText =
-    PARSE_PROMPT +
-    (trimmed.length > MAX_CHARS ? trimmed.slice(0, MAX_CHARS) : trimmed) +
-    '\n"""';
-
+  // ONE Gemini call for BOTH parse and ATS analysis — free-tier quota is 20
+  // requests/day/key (~140/day pool), so the old parse-then-score pair of
+  // calls per upload was 50% waste. The combined reply passes through
+  // ResumeParseAndScoreSchema before ANYTHING persists: on validation
+  // failure nothing is written and the client gets a retryable 502, exactly
+  // like the single-purpose routes.
   let parsedContent: ParsedResume;
+  let analysis: ResumeScoreAnalysis;
   try {
-    const raw = await callGemini(promptText, { temperature: 0.2 });
+    const raw = await callGemini(buildParseAndScorePrompt(trimmed), {
+      temperature: 0.2,
+    });
     const rawJson: unknown = JSON.parse(stripFences(raw));
-    const validated = ParsedResumeSchema.safeParse(rawJson);
+    const validated = ResumeParseAndScoreSchema.safeParse(rawJson);
     if (!validated.success) {
       console.error(
-        `[resume/parse] schema validation failed for resume ${resumeId}:`,
+        `[resume/parse] combined schema validation failed for resume ${resumeId}:`,
         validated.error.message
       );
       return NextResponse.json(
@@ -154,7 +145,8 @@ export async function POST(request: NextRequest) {
         { status: 502 }
       );
     }
-    parsedContent = validated.data;
+    parsedContent = validated.data.resume;
+    analysis = validated.data.ats_analysis;
   } catch (err) {
     if (err instanceof GeminiError) {
       const status = err.status === 429 ? 429 : 502;
@@ -170,18 +162,33 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  // Stash raw extracted text alongside the parsed fields so /score can
-  // compute heuristics without re-downloading and re-parsing the PDF.
+  // Stash raw extracted text alongside the parsed fields so score heuristics
+  // (here and in the standalone /score route) can use it without
+  // re-downloading and re-parsing the PDF.
   const enriched = { ...parsedContent, _resume_text: trimmed };
+  const heuristic = computeHeuristic(enriched);
+  const { finalScore, breakdown } = combineWithHeuristic(heuristic, analysis);
 
+  // Parse and score persist together — one update, after the single
+  // validation gate above. The columns stay independent downstream: the
+  // standalone /score route can still recompute ats_score/ats_breakdown for
+  // a resume whose parsed_content is already saved.
   const { error: updateError } = await supabase
     .from("resumes")
-    .update({ parsed_content: enriched })
+    .update({
+      parsed_content: enriched,
+      ats_score: finalScore,
+      ats_breakdown: breakdown,
+    })
     .eq("id", resumeId);
 
   if (updateError) {
     return NextResponse.json({ error: updateError.message }, { status: 500 });
   }
 
-  return NextResponse.json(parsedContent);
+  return NextResponse.json({
+    parsed: parsedContent,
+    ats_score: finalScore,
+    ats_breakdown: breakdown,
+  });
 }

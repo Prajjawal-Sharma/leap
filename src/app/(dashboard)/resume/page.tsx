@@ -41,10 +41,14 @@ type Step = "upload" | "parse" | "score";
 
 type StepStatus = "pending" | "active" | "done" | "failed";
 
+// "Analyze" covers the combined parse+score Gemini call; the final step is
+// just the results refresh — its labels must not claim AI work is happening,
+// or a refresh hiccup reads as "scoring failed" and tempts a re-upload that
+// burns another Gemini request (20/day/key free tier).
 const STEPS: { key: Step; label: string; activeLabel: string; doneLabel: string }[] = [
   { key: "upload", label: "Upload", activeLabel: "Uploading…", doneLabel: "Uploaded" },
-  { key: "parse", label: "Parse", activeLabel: "Parsing resume…", doneLabel: "Parsed" },
-  { key: "score", label: "Score", activeLabel: "Scoring with AI…", doneLabel: "Scored" },
+  { key: "parse", label: "Analyze", activeLabel: "Parsing & scoring with AI…", doneLabel: "Analyzed" },
+  { key: "score", label: "Finish", activeLabel: "Loading results…", doneLabel: "Done" },
 ];
 
 const STEP_INDEX: Record<Step, number> = { upload: 1, parse: 2, score: 3 };
@@ -168,9 +172,11 @@ export default function ResumePage() {
     setPhase("idle");
   };
 
-  // Run the parse and score phases (and the final list refresh) starting from
-  // the given step. Pulled out of handleFile so the Retry button can resume
-  // from a specific failed phase without re-uploading the file.
+  // Run the combined parse+score phase and the final list refresh, starting
+  // from the given step. /api/resume/parse now does BOTH parse and ATS
+  // scoring in one Gemini call (free tier is 20 requests/day/key, so the old
+  // second /score call per upload was 50% waste); the "score" step is now
+  // just the list refresh, and Retry-from-score retries only that refresh.
   const runFromStep = async (resumeId: string, fromStep: "parse" | "score") => {
     if (fromStep === "parse") {
       setPhase("parsing");
@@ -200,29 +206,6 @@ export default function ResumePage() {
 
     setPhase("scoring");
     try {
-      const scoreRes = await fetch("/api/resume/score", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ resume_id: resumeId }),
-      });
-      const scoreJson = await scoreRes.json();
-      if (!scoreRes.ok) {
-        setError(`Score failed: ${scoreJson.error ?? "Unknown error"}`);
-        setRetryable(Boolean(scoreJson.retryable));
-        setFailedStep("score");
-        setPhase("error");
-        return;
-      }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : "Unknown error";
-      setError(`Score failed: ${msg}`);
-      setRetryable(true);
-      setFailedStep("score");
-      setPhase("error");
-      return;
-    }
-
-    try {
       const refreshed = await fetch("/api/resume/list", { cache: "no-store" });
       if (!refreshed.ok) throw new Error("Failed to refresh resume list");
       const data = (await refreshed.json()) as { resumes: Resume[] };
@@ -232,7 +215,10 @@ export default function ResumePage() {
       setPhase("ready");
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Unknown error";
-      setError(`Score failed: ${msg}`);
+      // The combined call already persisted the parse AND the score — only
+      // the results refresh failed. Say so, or the user re-uploads and burns
+      // another Gemini request for nothing.
+      setError(`Refresh failed: ${msg}`);
       setRetryable(true);
       setFailedStep("score");
       setPhase("error");
@@ -321,9 +307,9 @@ export default function ResumePage() {
     phase === "uploading"
       ? "Uploading…"
       : phase === "parsing"
-        ? "Parsing resume…"
+        ? "Parsing & scoring with AI…"
         : phase === "scoring"
-          ? "Scoring with AI…"
+          ? "Loading results…"
           : "";
 
   const showDropzone = phase === "idle" || phase === "error" || isWorking;
@@ -409,7 +395,7 @@ export default function ResumePage() {
                   onClick={onRetry}
                   className="shrink-0 rounded-md bg-red-500/20 hover:bg-red-500/30 ring-1 ring-red-500/40 px-3 py-1.5 text-xs font-medium text-red-100"
                 >
-                  Retry {failedStep}
+                  {failedStep === "score" ? "Retry refresh" : "Retry analysis"}
                 </button>
               )}
           </div>

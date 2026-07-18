@@ -402,9 +402,21 @@ export async function callGeminiTier1<T>(
 // them). The only truthful probe is a minimal generateContent call. Runs at
 // most once per process per model, off the request path, fire-and-forget;
 // cost is one ~1-token request per key.
+//
+// That cost is real money at the free tier: quotaValue for gemini-3.5-flash
+// is 20 requests/day/project (observed 2026-07-18), so one ping sweep burns
+// ~7 of the pool's ~140 daily requests — and serverless cold starts would
+// repeat it per instance. The proactive sweep therefore runs only in
+// development, or when GEMINI_AVAILABILITY_CHECK=1 is set explicitly;
+// production diagnosis is covered by the zero-cost warn-on-rotate in
+// withGeminiKey, which stays on always.
 const availabilityChecked = new Set<string>();
 
 function scheduleKeyAvailabilityCheck(model: string): void {
+  const enabled =
+    process.env.GEMINI_AVAILABILITY_CHECK === "1" ||
+    process.env.NODE_ENV !== "production";
+  if (!enabled) return;
   if (availabilityChecked.has(model)) return;
   availabilityChecked.add(model);
   void (async () => {

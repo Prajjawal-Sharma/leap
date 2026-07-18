@@ -9,7 +9,6 @@ based on actual fit, not keyword stuffing.
 Owner: Prajjawal Sharma (meprajjwalsharma@gmail.com), System Engineer at TCS Gurugram.
 Repo: github.com/Prajjawal-Sharma/leap
 Vercel: https://leap-five-delta.vercel.app
-Working dir: D:\Prajjawal\Antigravity\leap
 
 ## Tech Stack (LOCKED — do not suggest alternatives)
 - Framework: Next.js 15 App Router + TypeScript strict mode
@@ -22,16 +21,8 @@ Working dir: D:\Prajjawal\Antigravity\leap
 - Hosting: Vercel free tier
 - Monitoring: Vercel Analytics + Sentry free tier
 
-## What Is Already Shipped (Weeks 1-2, merged to dev)
-- Auth: email + Google OAuth via Supabase (OAuth config fix pending)
-- Resume upload, PDF parsing (pdf-parse v2 + @napi-rs/canvas), ATS scoring with Gemini
-- Profile management page
-- Greenhouse job ingestion cron (25 companies, runs 2 AM UTC daily)
-- Embedding pipeline: Tier 1, 3,837 jobs embedded, fixed 1000-row pagination bug
-- pgvector cosine similarity match engine (match_jobs RPC in Supabase)
-- Semantic job feed at /jobs with match score pills, Save + View & Apply buttons
-- Kanban application tracker at /applications (6 columns: Saved/Applied/Viewed/Interviewing/Offered/Rejected)
-- Sidebar sign-out button (SidebarFooter component)
+## Known Issues
+- Google OAuth config fix pending
 
 ## Database Schema (Supabase, public schema)
 - profiles: id (= auth.users.id), email, full_name, current_job_title, target_roles[], target_locations[], expected_salary_min/max/currency, onboarded_at
@@ -41,22 +32,13 @@ Working dir: D:\Prajjawal\Antigravity\leap
 - applications: id, user_id, job_id (fk→jobs), status (saved|applied|viewed|interviewing|offered|rejected|withdrawn), notes, tailored_resume_id, applied_at, updated_at
 - RLS enabled on all tables
 
-## AI Architecture
-- src/lib/ai/gemini-client.ts: three call paths
-  * callGeminiTier1() — GEMINI_KEY_1 only, raw fetch, for embeddings (Tier 1 paid, 3000 RPM)
-  * streamGemini() — chat, streams gemini-2.5-flash via the Vercel AI SDK (@ai-sdk/google) on the Tier 1 paid key
-  * callGemini() / withGeminiKey() — rotates GEMINI_KEY_1..8 (free tier), for resume parse + ATS scoring
-- src/lib/ai/embeddings.ts: embedText() and embedBatch() use Tier 1 path
-- src/lib/ai/ats-scorer.ts: Gemini analysis of resume vs best practices
-- src/lib/ai/chat-context.ts: buildSystemPrompt() grounds chat in profile + primary resume + recent applications
-
 ## Current Sprint: Week 3 — Application Intelligence
-Remaining features to build (in order):
-1. AI Career Chat (/chat) — gemini-2.5-flash, grounded in profile/resume/applications, streaming via the Vercel AI SDK on the Tier 1 paid key [SHIPPED on feat/ai-career-chat — not yet merged to dev]
-2. One-Click Tailored Resume — Gemini 2.5 Pro rewrites resume per JD, export PDF [NEXT]
+Feature status (in order):
+1. AI Career Chat (/chat) — gemini-2.5-flash, grounded in profile/resume/applications, streaming via the Vercel AI SDK on the Tier 1 paid key [SHIPPED — merged to dev]
+2. One-Click Tailored Resume — Gemini 2.5 Pro rewrites resume per JD, export PDF [SHIPPED — merged to dev via PR #17; PDF export still pending]
 
 ## Coding Standards
-- Always use TypeScript strict mode — no ny unless absolutely necessary
+- Always use TypeScript strict mode — no `any` unless absolutely necessary
 - Server components for data fetching, Client components for interactivity
 - Supabase server client in server components/routes, browser client in "use client" components
 - All DB operations for user data must check RLS (user_id = auth.user.id)
@@ -78,5 +60,3 @@ Remaining features to build (in order):
 main ← protected, auto-deploys to Vercel
 dev ← integration branch, merge PRs here
 feat/* ← one branch per feature, PR to dev
-
-Current branch: feat/applications-tracker

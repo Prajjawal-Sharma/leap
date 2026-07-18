@@ -12,9 +12,14 @@ import { createServerSupabase } from "@/lib/supabase-server";
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
-// Tailoring rides the same free rotation as parse/score. Kept in a const so
-// swapping to a Pro model later is a one-line change.
-const TAILOR_MODEL = "gemini-2.5-flash";
+// Tailoring rides the same free rotation as parse/score. gemini-3.5-flash:
+// the 2026-07-18 per-key probe showed gemini-2.5-flash is 404-restricted on
+// KEY_6..KEY_8 and pro-class models are unusable on the free rotation
+// entirely (zero free-tier pro quota — 429 on every key; even paid KEY_1 is
+// 404-restricted from gemini-2.5-pro), so the newest GA flash is the
+// strongest model every rotation key can actually serve. Kept in a const so
+// a future model swap stays a one-line change.
+const TAILOR_MODEL = "gemini-3.5-flash";
 
 // The job description is external job-board text entering a prompt — hard
 // caps bound it regardless of what ingestion stored. 12k chars keeps the

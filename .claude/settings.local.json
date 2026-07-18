@@ -12,5 +12,9 @@
       "Bash(node *)",
       "Bash(npx next *)"
     ]
+  },
+  "attribution": {
+    "commit": "",
+    "pr": ""
   }
 }

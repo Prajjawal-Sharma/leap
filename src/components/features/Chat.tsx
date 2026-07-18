@@ -290,8 +290,7 @@ export default function Chat({ initialMessages }: Props) {
         )}
       </form>
       <p className="mt-2 text-[10px] text-neutral-600 text-center">
-        Enter to send · Shift+Enter for newline · Replies grounded in your
-        profile, resume, and applications
+        Enter to send · Shift+Enter for newline · AI can make mistakes — double-check responses
       </p>
     </div>
   );

@@ -50,8 +50,7 @@ export default async function ChatPage() {
           </span>
         </div>
         <p className="text-sm text-neutral-400">
-          Ask anything about your job search. Grounded in your profile, resume,
-          and applications — not generic advice.
+          Ask anything about your job search. This is an AI and can make mistakes — please double-check responses.
         </p>
       </header>
 

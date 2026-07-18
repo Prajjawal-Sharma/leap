@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useState } from "react";
 
+import { safeNext } from "@/lib/auth/safe-next";
 import { createBrowserSupabase } from "@/lib/supabase";
 
 function LoginForm() {
@@ -30,8 +31,8 @@ function LoginForm() {
       setSubmitting(false);
       return;
     }
-    const next = searchParams.get("next") ?? "/jobs";
-    router.replace(next);
+    // Guard the attacker-suppliable ?next= before navigating (open redirect).
+    router.replace(safeNext(searchParams.get("next")));
     router.refresh();
   };
 

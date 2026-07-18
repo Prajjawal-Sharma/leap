@@ -1,6 +1,8 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
+import { safeNext } from "@/lib/auth/safe-next";
+
 const AUTH_ROUTES = ["/login", "/signup", "/forgot-password", "/reset-password"];
 const DASHBOARD_PREFIXES = [
   "/dashboard",
@@ -48,7 +50,10 @@ export async function middleware(request: NextRequest) {
 
   if (user && isAuthRoute) {
     const url = request.nextUrl.clone();
-    url.pathname = searchParams.get("next") ?? "/jobs";
+    // Setting .pathname alone can't change the host, but route ?next=
+    // through the shared guard anyway: one rule for every read site, and it
+    // also blocks attacker-forced internal paths like "/\evil.com".
+    url.pathname = safeNext(searchParams.get("next"));
     url.search = "";
     return NextResponse.redirect(url);
   }

@@ -97,6 +97,41 @@ export const ResumeScoreAnalysisSchema = z.object({
 
 export type ResumeScoreAnalysis = z.infer<typeof ResumeScoreAnalysisSchema>;
 
+// Combined parse+score — /api/resume/parse asks Gemini for BOTH payloads in
+// one call (free-tier quota is 20 requests/day/key, so the second call per
+// upload was 50% waste), making the combined reply a single Gemini JSON
+// output site behind one safeParse gate. Composes the two existing schemas
+// so the persisted shapes and caps can never drift from the standalone
+// versions. The refine follows TailoredResumeSchema's degenerate-reply
+// rationale — every ParsedResume field defaults, so {} or a refusal object
+// would otherwise validate into a blank resume and persist as success — but
+// the test is deliberately WIDER than the tailor one: a tailored rewrite
+// always carries summary/experience/skills, while a legitimately sparse
+// PARSE (a fresher CV with only education, certifications, and contact
+// info) may not, and the old parse flow accepted those. Any extracted
+// content counts as substance; only an entirely empty extraction takes the
+// 502-retryable path.
+export const ResumeParseAndScoreSchema = z
+  .object({
+    resume: ParsedResumeSchema,
+    ats_analysis: ResumeScoreAnalysisSchema,
+  })
+  .refine(
+    (v) =>
+      v.resume.summary.trim().length > 0 ||
+      v.resume.experience.length > 0 ||
+      v.resume.skills.length > 0 ||
+      v.resume.education.length > 0 ||
+      v.resume.certifications.length > 0 ||
+      v.resume.full_name.trim().length > 0 ||
+      v.resume.email.trim().length > 0,
+    {
+      message: "combined payload extracted no resume content at all",
+    }
+  );
+
+export type ResumeParseAndScore = z.infer<typeof ResumeParseAndScoreSchema>;
+
 // One-Click Tailored Resume — /api/resume/tailor asks Gemini to rewrite the
 // primary resume against a job description and JSON.parses the reply, so it
 // is a Gemini JSON output site with the same safeParse boundary as

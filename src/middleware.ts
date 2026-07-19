@@ -3,7 +3,10 @@ import { NextResponse, type NextRequest } from "next/server";
 
 import { safeNext } from "@/lib/auth/safe-next";
 
-const AUTH_ROUTES = ["/login", "/signup", "/forgot-password", "/reset-password"];
+// /auth/reset-password is deliberately absent: this list bounces
+// authenticated users away, and a recovery-link user gains a session the
+// moment the code is exchanged — bouncing them would break the reset flow.
+const AUTH_ROUTES = ["/login", "/signup", "/forgot-password"];
 const DASHBOARD_PREFIXES = [
   "/dashboard",
   "/jobs",

@@ -15,6 +15,9 @@ export const maxDuration = 60;
 
 const HISTORY_LIMIT = 30;
 const MAX_MESSAGE_LEN = 4000;
+// Per-user daily cap on user messages. 30 covers heavy legitimate use while
+// bounding worst-case spend on the paid Tier-1 Gemini key; tune post-launch.
+const CHAT_DAILY_LIMIT = 30;
 
 type StoredMessage = {
   role: ChatRole;
@@ -58,6 +61,31 @@ export async function POST(request: NextRequest) {
     );
   }
   const message = raw.slice(0, MAX_MESSAGE_LEN);
+
+  // Daily cap — checked before the user row is inserted and before any
+  // Gemini call, so a capped message is never persisted or billed. Only
+  // role='user' rows count; assistant replies don't eat the quota. Day
+  // boundary is UTC to compare directly against created_at (timestamptz).
+  const dayStartUtc = new Date();
+  dayStartUtc.setUTCHours(0, 0, 0, 0);
+
+  const { count: sentToday, error: countErr } = await supabase
+    .from("chat_messages")
+    .select("id", { count: "exact", head: true })
+    .eq("user_id", user.id)
+    .eq("role", "user")
+    .gte("created_at", dayStartUtc.toISOString());
+
+  if (countErr) {
+    return NextResponse.json({ error: countErr.message }, { status: 500 });
+  }
+
+  if ((sentToday ?? 0) >= CHAT_DAILY_LIMIT) {
+    return NextResponse.json(
+      { error: "daily_limit_reached", limit: CHAT_DAILY_LIMIT },
+      { status: 429 }
+    );
+  }
 
   const { data: historyRows, error: historyErr } = await supabase
     .from("chat_messages")

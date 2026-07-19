@@ -101,9 +101,14 @@ function ResetPasswordForm() {
     const supabase = createBrowserSupabase();
     const { error: updateError } = await supabase.auth.updateUser({ password });
     if (updateError) {
-      // "Auth session missing!" from the SDK means the recovery session
-      // expired between page load and submit — say so in plain words.
-      const lost = updateError.message.toLowerCase().includes("session");
+      // The recovery session can die between page load and submit two ways:
+      // expired locally (AuthSessionMissingError) or revoked server-side
+      // (403 session_not_found, e.g. reset completed on another device).
+      // Broad message fallback covers SDK renames.
+      const lost =
+        updateError.name === "AuthSessionMissingError" ||
+        updateError.code === "session_not_found" ||
+        updateError.message.toLowerCase().includes("session");
       setSessionLost(lost);
       setError(
         lost

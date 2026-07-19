@@ -22,22 +22,27 @@ const FEATURES = [
   {
     icon: "feed",
     title: "Semantic job feed",
-    text: "Every live role ranked by real fit to your experience — a recommendation engine, not a keyword search.",
+    text: "Semantic matching scores every live role against your actual experience, so your feed opens on the jobs worth your time.",
   },
   {
     icon: "tailor",
-    title: "One-click resume tailoring",
-    text: "AI rewrites your resume for the specific job description before you apply.",
+    title: "One-click tailoring",
+    text: "One click rewrites your resume around a specific job description — every application reads like it was written for that role.",
   },
   {
     icon: "gauge",
     title: "ATS scoring",
-    text: "See your resume the way applicant tracking systems do, and fix the gaps before they cost you interviews.",
+    text: "See your resume the way screening software sees it, and fix what's filtering you out before you ever apply.",
   },
   {
     icon: "chat",
     title: "AI career chat",
-    text: "A copilot for the switch — aware of your profile, resume, and application pipeline.",
+    text: "A copilot that already knows your profile, resume, and pipeline — answers grounded in your search, not generic advice.",
+  },
+  {
+    icon: "tracker",
+    title: "Application tracker",
+    text: "Saved, applied, interviewing, offered — every application in one place, because the search doesn't end when you hit apply.",
   },
 ] as const;
 
@@ -60,6 +65,14 @@ function FeatureIcon({ name }: { name: (typeof FEATURES)[number]["icon"] }) {
       </>
     ),
     chat: <path d="M4 5h16v10h-9l-5 4v-4H4V5z" />,
+    tracker: (
+      <>
+        <path d="M4 7l2 2 3.5-3.5" />
+        <path d="M13 8h7" />
+        <path d="M4 16l2 2 3.5-3.5" />
+        <path d="M13 17h7" />
+      </>
+    ),
   };
   return (
     <svg
@@ -110,16 +123,16 @@ export default function LandingPage() {
         {/* Hero */}
         <section className="flex flex-col items-center pb-20 pt-14 text-center sm:pb-28 sm:pt-24">
           <p className="rounded-full bg-white/5 px-3 py-1 text-xs text-neutral-300 ring-1 ring-white/10">
-            Built for engineers at TCS, Infosys, Wipro &amp; beyond
+            Semantic matching &middot; ATS scoring &middot; One-click tailoring
           </p>
           <h1 className="mt-6 max-w-3xl text-4xl font-semibold leading-tight tracking-tight sm:text-5xl md:text-6xl">
-            Make the <span className="text-[#6366f1]">leap</span> from service
-            to product.
+            Make the <span className="text-[#6366f1]">leap</span> to a role
+            that actually fits.
           </h1>
           <p className="mt-5 max-w-2xl text-base leading-7 text-neutral-400 sm:text-lg sm:leading-8">
-            Leap reads your resume and ranks every job by real fit — think
-            YouTube recommendations, but for your career. No keyword stuffing,
-            no scrolling through roles that were never for you.
+            Leap reads your resume and ranks every live role by real fit —
+            think YouTube recommendations, but for your career. No keyword
+            stuffing, no scrolling through jobs that were never for you.
           </p>
           <div className="mt-8 flex w-full flex-col items-center justify-center gap-3 sm:w-auto sm:flex-row">
             <Link
@@ -136,7 +149,7 @@ export default function LandingPage() {
             </Link>
           </div>
           <p className="mt-5 text-xs text-neutral-500">
-            3,000+ live roles from 25 product companies, refreshed daily.
+            3,000+ live roles at top product companies, refreshed daily.
           </p>
         </section>
 
@@ -163,11 +176,11 @@ export default function LandingPage() {
         {/* Features */}
         <section className="border-t border-white/10 py-16 sm:py-20">
           <h2 className="text-center text-2xl font-semibold sm:text-3xl">
-            Everything you need to switch
+            From upload to offer
           </h2>
           <p className="mx-auto mt-3 max-w-xl text-center text-sm leading-6 text-neutral-400">
-            One place to find the right roles, sharpen your resume, and keep
-            your search on track.
+            One resume in: Leap scores it, matches it against every live role,
+            tailors it per application, and tracks what happens next.
           </p>
           <div className="mt-10 grid gap-4 sm:grid-cols-2">
             {FEATURES.map((feature) => (
@@ -191,7 +204,7 @@ export default function LandingPage() {
         <section className="pb-16 pt-4 sm:pb-24">
           <div className="rounded-xl bg-neutral-900/60 px-6 py-10 text-center ring-1 ring-white/10 sm:py-12">
             <h2 className="text-2xl font-semibold sm:text-3xl">
-              Ready to make the switch?
+              Ready to make the leap?
             </h2>
             <p className="mx-auto mt-3 max-w-md text-sm leading-6 text-neutral-400">
               Upload your resume and see your ranked feed in minutes — free
@@ -212,7 +225,7 @@ export default function LandingPage() {
           <div>
             <p className="text-base font-semibold text-[#6366f1]">Leap</p>
             <p className="mt-1 text-xs text-neutral-500">
-              Built for Indian software engineers making the switch.
+              Matched by meaning, not keywords.
             </p>
           </div>
           <div className="flex items-center gap-4 text-sm text-neutral-400">

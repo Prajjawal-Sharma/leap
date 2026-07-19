@@ -13,9 +13,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Leap — AI job matching for Indian software engineers",
+  title: "Leap — AI job matching by real fit, not keywords",
   description:
-    "Leap ranks live product-company roles by real fit to your resume — semantic matching, one-click resume tailoring, ATS scoring, and an AI career copilot for engineers making the service-to-product switch.",
+    "Leap ranks every live role by how well it actually fits your resume — semantic matching, not keyword search. ATS scoring, one-click resume tailoring, an AI career chat that knows your profile, and one tracker for every application. Better-fitting roles, far less sorting.",
 };
 
 export default function RootLayout({

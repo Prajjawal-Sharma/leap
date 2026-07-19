@@ -61,6 +61,7 @@ export default function Chat({ initialMessages }: Props) {
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [limitNotice, setLimitNotice] = useState<string | null>(null);
   const [clearing, setClearing] = useState(false);
 
   const scrollerRef = useRef<HTMLDivElement | null>(null);
@@ -94,6 +95,7 @@ export default function Chat({ initialMessages }: Props) {
       if (trimmed.length === 0 || sending) return;
 
       setError(null);
+      setLimitNotice(null);
       setSending(true);
 
       const userId = `local-user-${Date.now()}`;
@@ -118,6 +120,21 @@ export default function Chat({ initialMessages }: Props) {
 
         if (!res.ok || !res.body) {
           const payload = await res.json().catch(() => ({}));
+          if (res.status === 429 && payload?.error === "daily_limit_reached") {
+            // The server never persisted this message — drop the optimistic
+            // bubbles so the view matches stored history, and give the user
+            // their text back. No retry: the limit can't clear today.
+            const limit =
+              typeof payload?.limit === "number" ? payload.limit : 30;
+            setMessages((prev) =>
+              prev.filter((m) => m.id !== userId && m.id !== assistantId)
+            );
+            setInput(trimmed);
+            setLimitNotice(
+              `You've reached today's chat limit (${limit} messages). It resets at midnight UTC.`
+            );
+            return;
+          }
           const msg =
             typeof payload?.error === "string"
               ? payload.error
@@ -200,6 +217,7 @@ export default function Chat({ initialMessages }: Props) {
     if (!ok) return;
     setClearing(true);
     setError(null);
+    setLimitNotice(null);
     try {
       const res = await fetch("/api/chat", { method: "DELETE" });
       if (!res.ok) {
@@ -248,6 +266,12 @@ export default function Chat({ initialMessages }: Props) {
           </ul>
         )}
       </div>
+
+      {limitNotice && (
+        <div className="mt-3 rounded-md bg-amber-500/10 ring-1 ring-amber-500/30 px-3 py-2 text-xs text-amber-200">
+          {limitNotice}
+        </div>
+      )}
 
       {error && (
         <div className="mt-3 rounded-md bg-red-500/10 ring-1 ring-red-500/30 px-3 py-2 text-xs text-red-200">

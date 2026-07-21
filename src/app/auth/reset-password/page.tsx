@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 
 import { createBrowserSupabase } from "@/lib/supabase";
 
@@ -18,6 +18,7 @@ function ResetPasswordForm() {
   const [error, setError] = useState<string | null>(null);
   const [sessionLost, setSessionLost] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const verifyStartedRef = useRef(false);
 
   useEffect(() => {
     const supabase = createBrowserSupabase();
@@ -38,7 +39,42 @@ function ResetPasswordForm() {
     });
 
     const verify = async () => {
+      // token_hash links (email template: ?token_hash={{ .TokenHash }}&type=
+      // recovery) verify server-side with no browser-stored PKCE verifier,
+      // so the link works in a different browser/device than the one that
+      // requested the reset.
+      const tokenHash = searchParams.get("token_hash");
+      const type = searchParams.get("type");
       const code = searchParams.get("code");
+
+      // token_hash is a bearer credential redeemable from any browser (the
+      // old PKCE code was useless without this browser's verifier), so strip
+      // it from the address bar before verifying — otherwise a valid
+      // single-use token lingers in browser history on a shared machine.
+      // The email link still holds the original URL if a retry is needed.
+      if (tokenHash || code) {
+        window.history.replaceState(null, "", window.location.pathname);
+      }
+
+      if (tokenHash && type === "recovery") {
+        const { data, error: verifyError } = await supabase.auth.verifyOtp({
+          token_hash: tokenHash,
+          type: "recovery",
+        });
+        if (!verifyError) {
+          setEmail(data.session?.user.email ?? null);
+          markReady();
+          return;
+        }
+        // Expired/used token: fall through to the getSession check below
+        // instead of marking invalid here — a user already holding a session
+        // must not dead-end on the error screen (middleware bounces them off
+        // /forgot-password, so they couldn't re-request).
+      }
+
+      // Transition-only fallback: old-style PKCE links (?code=) still in
+      // inboxes from before the email template switched to token_hash.
+      // Remove once those links have expired.
       if (code) {
         const { data, error: exchangeError } =
           await supabase.auth.exchangeCodeForSession(code);
@@ -67,7 +103,17 @@ function ResetPasswordForm() {
       }
     };
 
-    void verify();
+    // Run once per mount: the URL scrub in verify() re-fires this effect
+    // via searchParams, and a second run would race the in-flight
+    // verifyOtp — its getSession could see no session yet and mark a
+    // valid link invalid.
+    if (!verifyStartedRef.current) {
+      verifyStartedRef.current = true;
+      // The SDK can throw outside its { error } returns (navigator-lock
+      // timeout, malformed response) — settle to "invalid" instead of
+      // leaving the spinner stuck on "verifying".
+      verify().catch(() => markInvalid());
+    }
 
     return () => subscription.unsubscribe();
   }, [searchParams]);
@@ -134,8 +180,8 @@ function ResetPasswordForm() {
       <div className="w-full max-w-md rounded-xl bg-neutral-900/60 ring-1 ring-white/10 p-8 text-center">
         <h1 className="text-2xl font-semibold mb-2">Link expired</h1>
         <p className="text-sm text-neutral-400">
-          This password reset link is invalid or has expired. Request a new one
-          and open it in the same browser you requested it from.
+          This password reset link is invalid or has expired. Please request a
+          new one.
         </p>
         <Link
           href="/forgot-password"

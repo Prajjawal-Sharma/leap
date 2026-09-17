@@ -62,8 +62,9 @@ There are three distinct call paths into Gemini. They are not interchangeable.
 machinery; note that the model const is **not** centralised there — the tailor
 route pins its own (see below).
 
-- **Free multi-key rotation** (`callGemini` / `withGeminiKey`) — the combined
-  resume parse+score call, the standalone re-score path, and resume tailoring.
+- **Free multi-key rotation** (`callGemini` / `withGeminiKey`) — three
+  consumers: the combined resume parse+score call, `/api/resume/score`
+  (standalone re-score, its own separate call), and resume tailoring.
   Rotates over `GEMINI_KEY_2..GEMINI_KEY_8` with 60s cooldowns and exponential
   backoff. Model: **gemini-3.5-flash** (`DEFAULT_MODEL` in `gemini-client.ts`;
   `TAILOR_MODEL` in `src/app/api/resume/tailor/route.ts` holds the same value
@@ -110,7 +111,7 @@ the daily pool on every cold start, so leave it unset there.
 3. Zod caps borrowed from another prompt 502'd real output (`keywords_missing` 115 chars vs 100) — calibrate per prompt; refines must accept sparse-real data.
 4. Prompt fences can be escaped by a forged END marker or a tab between slashes — collapse `===` runs; reject C0/DEL in redirect targets.
 5. "Model not available to new users" 404s vary per key/project — rotate past them; entitlement only shows at `generateContent`.
-6. Free tier is 20 req/day/key; a proactive availability ping per cold start ate ~5% of the pool — dev-only.
+6. Free tier is 20 req/day/key; a proactive availability ping per cold start ate ~5% of the pool (~7 requests, one per free key). Pings run when `NODE_ENV !== "production"` OR `GEMINI_AVAILABILITY_CHECK=1` — that flag ENABLES them in production, it does not restrict them.
 7. A daily cap counted from rows the user can delete resets on Clear chat — use a counter table or soft-delete.
 8. Stacked PRs don't retarget when the base branch merges — always `--base dev`; delete merged branches.
 9. `NEXT_PUBLIC_*` is baked at build time — set per environment before the deploy build, not after.

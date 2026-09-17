@@ -118,11 +118,9 @@ Week 4 feature work.
 6. `chore/middleware-to-proxy` — `src/middleware.ts` uses the deprecated
    convention; rename is its own PR.
 
-The `#11` / `#13` / `#23` markers come verbatim from SHIP_PIPELINE §10. They
-are **not** GitHub issue or PR numbers — this repo has no issues, and PRs
-#11/#13/#23 are the Vertex research brief, the job-freshness fix and the chat
-rate-limit fix respectively. Treat them as references into the PM's own
-findings list until that list is linked here.
+The `#11` / `#13` / `#23` markers refer to **July internal audit findings**,
+not GitHub issues or PRs — this repo has no issues, and PRs #11/#13/#23 are
+unrelated changes.
 
 ### Week 4: Activation and Launch — not started
 

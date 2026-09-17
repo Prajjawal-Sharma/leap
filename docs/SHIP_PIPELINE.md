@@ -490,8 +490,8 @@ Correct these facts first (verified by the July recon, all currently wrong or st
 
 ### Model & key routing
 - `GEMINI_KEY_1` (paid Tier 1): embeddings + chat (`streamGemini`, `CHAT_MODEL` pinned).
-- `GEMINI_KEY_2..8` (free rotation, 20 req/day/key): parse+score (one call), tailor. `DEFAULT_MODEL`/`TAILOR_MODEL` = `gemini-3.5-flash`. Rotate past per-key 404s; probe entitlement with `generateContent`, not ListModels.
-- Availability pings are dev-only (`GEMINI_AVAILABILITY_CHECK=1`); they burn quota per cold start in prod.
+- `GEMINI_KEY_2..8` (free rotation, 20 req/day/key): parse+score (one call), `/api/resume/score` (standalone re-score — its own separate call, not part of the upload flow), tailor. `DEFAULT_MODEL` = `gemini-3.5-flash` in `gemini-client.ts`; `TAILOR_MODEL` = same value, pinned separately in `src/app/api/resume/tailor/route.ts`. Rotate past per-key 404s; probe entitlement with `generateContent`, not ListModels.
+- Availability pings run when `NODE_ENV !== "production"` **OR** `GEMINI_AVAILABILITY_CHECK=1`. The flag ENABLES them, it does not scope them to dev — setting it in production turns pings on and burns ~7 requests (one per free key) on every cold start. Leave it unset in prod.
 
 ### Pitfalls (append via /retro; keep one line each)
 1. Supabase JS caps SELECT at 1,000 rows by default — paginate with stable ordering.
@@ -499,7 +499,7 @@ Correct these facts first (verified by the July recon, all currently wrong or st
 3. Zod caps borrowed from another prompt 502'd real output (`keywords_missing` 115 chars vs 100) — calibrate per prompt; refines must accept sparse-real data.
 4. Prompt fences can be escaped by a forged END marker or a tab between slashes — collapse `===` runs; reject C0/DEL in redirect targets.
 5. "Model not available to new users" 404s vary per key/project — rotate past them; entitlement only shows at `generateContent`.
-6. Free tier is 20 req/day/key; a proactive availability ping per cold start ate ~5% of the pool — dev-only.
+6. Free tier is 20 req/day/key; a proactive availability ping per cold start ate ~5% of the pool (~7 requests, one per free key). Pings run when `NODE_ENV !== "production"` OR `GEMINI_AVAILABILITY_CHECK=1` — that flag ENABLES them in production, it does not restrict them.
 7. A daily cap counted from rows the user can delete resets on Clear chat — use a counter table or soft-delete.
 8. Stacked PRs don't retarget when the base branch merges — always `--base dev`; delete merged branches.
 9. `NEXT_PUBLIC_*` is baked at build time — set per environment before the deploy build, not after.
@@ -542,7 +542,8 @@ Do not run /ship yet. Stop after the PR is open.
 
 ## 10. Phase 1 onward — first workload through `/ship`
 
-Order (one `/ship` each; PM writes the spec from ROADMAP + this backlog):
+Order (one `/ship` each; PM writes the spec from ROADMAP + this backlog).
+`#11`/`#13`/`#23` below are July internal audit findings — not GitHub issues or PRs.
 1. `fix/error-boundaries` (#11) — every page and the dashboard layout.
 2. `fix/reauth-on-password-change` — Supabase secure-password-change + `reauthenticate()` flow.
 3. `fix/quota-proof-chat-count` — counter table migration; Clear chat no longer resets the cap.

@@ -1,26 +1,40 @@
 # Leap — Product Roadmap
 
-> **Vision:** Leap is the semantic job matching platform for anyone, anywhere.
-> We match candidates to opportunities based on actual fit — not keywords,
-> not pedigree, not paid visibility. India-first launch, global architecture
-> from day one.
+> **Vision:** Leap is the AI job platform for anyone, anywhere. We match
+> candidates to opportunities by meaning — what the work actually involves and
+> what the candidate can actually do — not keywords, not pedigree, not paid
+> visibility. India-first is where we launch and acquire, not what the product
+> is about; the architecture is global from day one and the copy is value-led.
 
 ---
 
-## Current State (May 2026)
+## Current State (shipped to `dev` through PR #24)
 
-**Shipped (Weeks 1-2):**
-- Authentication (email + Google OAuth via Supabase)
-- Resume upload, PDF parsing, ATS scoring with Gemini analysis
-- Profile management (current role, target search, salary expectations)
-- Greenhouse job ingestion across 25 companies (~3,800 active jobs)
-- 768-dimension semantic embeddings via Gemini Embedding 001
+**Weeks 1-2 — Foundation:**
+- Authentication (email + Google OAuth via Supabase) — PR #5
+- Resume upload, PDF parsing, ATS scoring with Gemini analysis — PR #6
+- Profile management (current role, target search, salary expectations) — PR #7
+- Greenhouse job ingestion — PR #8, audited down to 20 live company boards in
+  PR #14 (seven original slugs had never returned a job)
+- 768-dimension semantic embeddings via gemini-embedding-001
 - pgvector cosine similarity match engine
-- Personalized job feed with match scores and reasoning placeholders
-- Daily cron infrastructure for ingest + embedding refresh
+- Personalized job feed with match scores
+- Daily cron infrastructure for ingest + embedding refresh (both Vercel Hobby
+  cron slots now in use)
 
-**Tech foundation:** Next.js 15 App Router · TypeScript · Supabase (Postgres
-+ pgvector + Auth + Storage) · Gemini API (Tier 1) · Vercel · Resend.
+**Week 3 — Application Intelligence (complete):** see Phase 1 below.
+
+**Hardening shipped alongside:** embed-pipeline data-loss fixes (PR #12), job
+freshness via `last_seen_at` (PR #13), Gemini JSON validation boundary
+(PR #15), per-key model-availability rotation (PR #18), quota-driven
+single-call parse+score (PR #19), open-redirect guard (PR #20), full
+password-reset flow (PRs #21/#24), per-user daily chat cap (PR #23), marketing
+landing page (PR #22).
+
+**Tech foundation:** Next.js 16 App Router · React 19 · TypeScript · Tailwind
+v4 (CSS-first theme, no config file) · Supabase (Postgres + pgvector + Auth +
+Storage) · Gemini API (free rotation + Tier 1 paid) · Vercel Hobby.
+Resend and Sentry are planned, not yet installed.
 
 ---
 
@@ -37,9 +51,9 @@
 
 ## Phase 1 — MVP Completion (Weeks 3-4)
 
-### Week 3: Application Intelligence
+### Week 3: Application Intelligence — complete
 
-**1. Kanban Application Tracker**
+**1. Kanban Application Tracker** — ✅ **SHIPPED** (PR #10)
 - *What:* Drag-drop board with 6 columns: Saved · Applied · Viewed · Interviewing · Offered · Rejected/Withdrawn
 - *Why:* Users currently track applications in spreadsheets or Teal. Keeping
   them in Leap closes the loop and feeds our recommendation engine
@@ -50,7 +64,7 @@
   `/jobs` feed (add "Save" and "Mark as applied" buttons on JobCard).
 - *Effort:* 1.5 days
 
-**2. AI Career Chat**
+**2. AI Career Chat** — ✅ **SHIPPED** (PR #16)
 - *What:* Persistent conversation with Gemini 2.5 Flash that has full user
   context: profile, resume, applications, recently viewed jobs.
 - *Why:* Career questions are personal and contextual. ChatGPT can answer
@@ -61,8 +75,12 @@
 - *Integrates with:* All existing user data (profile, resume, applications).
   Surfaces as `/chat` route in dashboard.
 - *Effort:* 2 days
+- *As built:* streams gemini-2.5-flash on the paid Tier 1 key via the Vercel AI
+  SDK. User context is fenced as data (`chat-context.ts`) and `parsed_content`
+  is re-validated before it reaches the prompt. Capped at 30 user messages per
+  day (PR #23).
 
-**3. One-Click Tailored Resume**
+**3. One-Click Tailored Resume** — ✅ **SHIPPED** (PR #17), PDF export still outstanding
 - *What:* On any job card, "Tailor my resume for this role" button generates
   a JD-optimized version of the user's resume. Preview, edit, accept/reject.
 - *Why:* The single most-asked-for feature from candidate research. Saves
@@ -76,8 +94,13 @@
   applications tracker (auto-creates application row when user applies with
   tailored resume).
 - *Effort:* 2 days
+- *As built:* the rewrite runs on the free rotation (gemini-3.5-flash), not
+  Gemini 2.5 Pro — pro-class models are 404/429 on every key in this project.
+  Tailored versions are stored in `resumes` with `kind = 'tailored'` and a
+  `job_id`. **PDF export is not built yet** and is the one open item from
+  Week 3.
 
-### Week 4: Activation and Launch
+### Week 4: Activation and Launch — not started
 
 **4. Daily Digest Email**
 - *What:* Personalized morning email with 5-10 new matches above 70% match
@@ -354,6 +377,17 @@ Critical decisions documented as we go. Key entries so far:
 - **May 2:** Upgraded GEMINI_KEY_1 to Tier 1 paid (₹1000 deposit) after free
   tier rate limits made development unviable
 - **May 13:** Phase 1 match engine shipped — semantic matching live
+- **Jul 14:** Greenhouse slug audit — 25 boards down to 20 that actually
+  return jobs; freshness now tracked via `last_seen_at`
+- **Jul 18:** Free rotation moved to gemini-3.5-flash after per-key
+  `generateContent` probes showed 2.5-flash 404s on newer free projects.
+  Chat stays pinned to gemini-2.5-flash on the paid key.
+- **Upgraded to Next.js 16 + React 19**; Tailwind v4 with a CSS-first theme and
+  no `tailwind.config`. UI primitives are hand-rolled — shadcn/ui, Framer
+  Motion and lucide were evaluated and deliberately not adopted.
+- **Positioning:** dropped the "service company to product company" framing.
+  Leap is an AI job platform that matches by meaning; India-first is
+  distribution, not copy.
 
 ---
 
@@ -367,4 +401,4 @@ Critical decisions documented as we go. Key entries so far:
 This is a living document. Edit freely. Add new ideas to the appropriate
 phase. Move features between phases as priorities shift.
 
-Updated: May 13, 2026
+Updated: September 17, 2026

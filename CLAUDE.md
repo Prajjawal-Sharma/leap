@@ -39,24 +39,36 @@ Production: https://leap-five-delta.vercel.app
   proposing a third cron.
 - Not installed, despite earlier notes claiming otherwise: Resend, Sentry,
   Vercel Analytics. Do not import or reference them as if they exist.
+- `src/middleware.ts` still uses the deprecated Next.js `middleware.ts`
+  convention; the rename to `proxy.ts` is tracked as its own change
+  (`chore/middleware-to-proxy`), not something to fold into an unrelated PR.
 
 ## Brand Tokens
 - Page background: `#0a0a0a` (also the dark-mode `--background` in `globals.css`)
 - Surfaces / cards / inputs: `bg-neutral-900/60` with `ring-1 ring-white/10`
 - Primary: `#6366f1` — hover `#5458e0`
-- Muted text on dark: `text-neutral-300`, `text-neutral-500`
+- Muted text on dark: `text-neutral-300` / `text-neutral-400` (also `text-neutral-500`)
 
 Tokens are used as literal arbitrary Tailwind values (`bg-[#6366f1]`,
 `ring-[#6366f1]/40`) because there is no config file to extend.
 
-## Model & key routing
-There are three distinct call paths into Gemini — they are not
-interchangeable, and `src/lib/ai/gemini-client.ts` is the only place that
-should know the difference.
+Geist is loaded in `layout.tsx` and mapped to `--font-sans`, but `globals.css`
+sets `body { font-family: Arial, Helvetica, sans-serif }` — so the body renders
+in Arial by accident. Put `font-sans` on new surfaces to get Geist.
 
-- **Free multi-key rotation** (`callGemini` / `withGeminiKey`) — resume parse,
-  ATS scoring, and resume tailoring. Rotates over `GEMINI_KEY_2..GEMINI_KEY_8`
-  with 60s cooldowns and exponential backoff. Model: **gemini-3.5-flash**.
+## Model & key routing
+There are three distinct call paths into Gemini. They are not interchangeable.
+`src/lib/ai/gemini-client.ts` owns the rotation, cooldown and backoff
+machinery; note that the model const is **not** centralised there — the tailor
+route pins its own (see below).
+
+- **Free multi-key rotation** (`callGemini` / `withGeminiKey`) — the combined
+  resume parse+score call, the standalone re-score path, and resume tailoring.
+  Rotates over `GEMINI_KEY_2..GEMINI_KEY_8` with 60s cooldowns and exponential
+  backoff. Model: **gemini-3.5-flash** (`DEFAULT_MODEL` in `gemini-client.ts`;
+  `TAILOR_MODEL` in `src/app/api/resume/tailor/route.ts` holds the same value
+  separately). Free tier is **20 requests/day per key** — roughly 140/day
+  across the pool of 7, so treat every free-rotation call as scarce.
   `GEMINI_KEY_1` is deliberately excluded so free-tier work never bills the
   paid project.
 - **Tier 1 paid, raw fetch** (`callGeminiTier1` / `getTier1Key`) — embeddings.
@@ -66,11 +78,51 @@ should know the difference.
   pinned in its own `CHAT_MODEL` const so rotation-model changes never
   silently move chat.
 
+Resume upload spends **one** Gemini call: parse and ATS scoring were merged
+into a single prompt precisely because of the 20/day/key ceiling.
+`/api/resume/score` still exists as a standalone re-score path and makes its
+own free-rotation call — it is not part of the upload flow.
+
 Model availability is **per-project, not per-model**: Google 404s older models
 on projects with no prior usage, and `ListModels` still lists a model the
 project cannot call. Only a real `generateContent` proves access. That is why
 rotation skips per-key 404s mid-call rather than failing, and why model consts
 are probed rather than assumed uniform.
+
+Per-key availability pings are **off in production by default** — they run
+when `NODE_ENV !== "production"`, or whenever `GEMINI_AVAILABILITY_CHECK=1` is
+set. Setting that flag in production turns them on and burns ~7 requests of
+the daily pool on every cold start, so leave it unset there.
+
+### Definition of Done (every PR)
+- `tsc --noEmit`, `eslint src --max-warnings=0`, `npm test`, `npm run build` all green (`.claude/hooks/gate.sh`).
+- Every Gemini JSON output site: `JSON.parse → schema.safeParse` before any persistence; failure → 502 `{retryable:true}`, zero writes; schema composes existing ones; caps justified by that prompt's observed output.
+- Every user- or job-derived string entering a prompt is fenced (BEGIN/END + guard line) with `===` runs collapsed.
+- Every `resumes` read that expects a primary/uploaded resume filters `kind='uploaded'`; only the upload promote step writes `is_primary=true`.
+- Migrations: next number, idempotent (`if not exists` / `drop ... if exists`), additive-first, applied by a human; PR states before/after-deploy.
+- No new dependency without a spec-approved reason.
+- PR body follows the template; review artifacts are verbatim.
+- Never merge. Never push main. Always `gh pr create --base dev`.
+
+### Pitfalls (append via /retro; keep one line each)
+1. Supabase JS caps SELECT at 1,000 rows by default — paginate with stable ordering.
+2. Multiple `is_primary=true` rows broke `maybeSingle` — unset-then-set; tailored rows are `kind='tailored'`, never primary.
+3. Zod caps borrowed from another prompt 502'd real output (`keywords_missing` 115 chars vs 100) — calibrate per prompt; refines must accept sparse-real data.
+4. Prompt fences can be escaped by a forged END marker or a tab between slashes — collapse `===` runs; reject C0/DEL in redirect targets.
+5. "Model not available to new users" 404s vary per key/project — rotate past them; entitlement only shows at `generateContent`.
+6. Free tier is 20 req/day/key; a proactive availability ping per cold start ate ~5% of the pool — dev-only.
+7. A daily cap counted from rows the user can delete resets on Clear chat — use a counter table or soft-delete.
+8. Stacked PRs don't retarget when the base branch merges — always `--base dev`; delete merged branches.
+9. `NEXT_PUBLIC_*` is baked at build time — set per environment before the deploy build, not after.
+10. PKCE recovery links are same-browser only — use `token_hash`/`verifyOtp`; email templates live only in the Supabase dashboard.
+11. Adding a route to `AUTH_ROUTES` bounces authenticated users — a recovery session is authenticated; leave reset out of both lists.
+12. ROADMAP/CLAUDE.md drift (shadcn, Next 15, `onboarded_at`) — verify docs against code before building; `/retro` keeps docs true.
+13. A freshness sweep must exempt companies whose fetch failed and skip entirely if zero boards returned — otherwise it mass-deactivates.
+14. Don't re-run stale verifier agents on already-fixed code; run one fresh adversarial pass on the final diff.
+15. `git` in the wrong clone/terminal looks like lost work — one repo, one path, check `pwd` first.
+
+> Definition of Done and Pitfalls above are reproduced verbatim from
+> `docs/SHIP_PIPELINE.md` §6. Append new pitfalls there via `/retro`.
 
 ## Database Schema (Supabase, public schema)
 - `profiles`: id (= auth.users.id), full_name, phone, location, current_company,

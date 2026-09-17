@@ -100,9 +100,39 @@ Resend and Sentry are planned, not yet installed.
   `job_id`. **PDF export is not built yet** and is the one open item from
   Week 3.
 
+### Launch-gating backlog — not started
+
+Ordered queue from `docs/SHIP_PIPELINE.md` §10; one branch each, spec written
+from this roadmap plus that backlog. These gate launch and come before the
+Week 4 feature work.
+
+1. `fix/error-boundaries` (`#11`) — every page and the dashboard layout.
+2. `fix/reauth-on-password-change` — Supabase secure-password-change +
+   `reauthenticate()` flow.
+3. `fix/quota-proof-chat-count` — counter table migration; Clear chat no longer
+   resets the cap. (Today's cap counts `chat_messages` rows the user can
+   delete — see Pitfall 7 in CLAUDE.md.)
+4. `fix/reset-drive-by` — confirm step before `verifyOtp` when a session
+   already exists.
+5. `fix/oauth-chain` (`#13`) and `fix/parse-timeout` (`#23`).
+6. `chore/middleware-to-proxy` — `src/middleware.ts` uses the deprecated
+   convention; rename is its own PR.
+
+The `#11` / `#13` / `#23` markers come verbatim from SHIP_PIPELINE §10. They
+are **not** GitHub issue or PR numbers — this repo has no issues, and PRs
+#11/#13/#23 are the Vertex research brief, the job-freshness fix and the chat
+rate-limit fix respectively. Treat them as references into the PM's own
+findings list until that list is linked here.
+
 ### Week 4: Activation and Launch — not started
 
-**4. Daily Digest Email**
+Branch names and sequencing constraints below are from SHIP_PIPELINE §10.
+
+**4. Daily Digest Email** — `feat/digest`
+- *Blocked on a decision:* needs a **3rd cron**, but Vercel Hobby allows 2 and
+  both are used (ingest + embed). Either drop a plan upgrade in, fold the
+  digest into an existing cron, or trigger it externally — decide before
+  speccing.
 - *What:* Personalized morning email with 5-10 new matches above 70% match
   threshold, summary of application status changes, one career tip.
 - *Why:* Re-engagement loop. The marginal user signs up, browses once,
@@ -114,7 +144,7 @@ Resend and Sentry are planned, not yet installed.
   Supabase auth (uses verified email).
 - *Effort:* 1 day
 
-**5. Insights Dashboard**
+**5. Insights Dashboard** — `feat/insights`
 - *What:* Personal analytics: skill coverage heatmap vs target roles, salary
   expectations vs market range, application funnel (sent → viewed →
   interviewed → offered), strengths and gaps.
@@ -126,7 +156,9 @@ Resend and Sentry are planned, not yet installed.
   tracker, parsed resume skills.
 - *Effort:* 1.5 days
 
-**6. Onboarding Flow**
+**6. Onboarding Flow** — `feat/onboarding`
+- *Blocked on:* `profiles.onboarded_at` does not exist in any migration. Add it
+  (next number, idempotent, additive) before this work starts.
 - *What:* First-time user wizard: upload resume → confirm profile auto-fill
   → set target roles + locations → see first 5 matches → guided tour.
 - *Why:* First 60 seconds determines retention. Friction here kills 80% of
@@ -137,7 +169,7 @@ Resend and Sentry are planned, not yet installed.
   re-styled as wizard steps.
 - *Effort:* 1 day
 
-**7. Mobile Responsive Pass**
+**7. Mobile Responsive Pass** — `feat/mobile-pass`
 - *What:* Every page works at 375px width. Touch targets minimum 44px.
   Kanban tracker becomes vertical list on mobile.
 - *Why:* India is mobile-first. ~70% of LinkedIn India traffic is mobile.
@@ -146,12 +178,37 @@ Resend and Sentry are planned, not yet installed.
 - *Integrates with:* All existing pages. No new logic.
 - *Effort:* 1 day
 
+**8. Tailored Resume PDF Export** — `feat/tailored-pdf-export`
+- *What:* Export a generated tailored resume as PDF. This is the one item left
+  open from Week 3 (PR #17 shipped generate/preview/store without export).
+- *Why:* Without export the tailored resume can't actually be submitted
+  anywhere, so the feature stops one step short of the user's goal.
+- *Tech:* No PDF generation exists in the repo today — `pdf-parse` is
+  read-only, for parsing uploads. Needs a renderer chosen with the Vercel
+  serverless size limit in mind.
+
+**9. India Remote Filter** — `feat/india-remote-filter`
+- *What:* Filter the job feed to roles that are remote-friendly for
+  India-based candidates.
+- *Why:* Distribution fit for the launch market — the 20 Greenhouse boards are
+  mostly US/EU companies, so "remote" is what makes them reachable at all.
+- *Tech:* Builds on the existing `is_remote` and `location` columns on `jobs`;
+  no new source needed.
+
 **Week 4 Launch Criteria:**
 - 5 real users complete full flow: signup → onboard → upload → match → apply → track
 - Zero P0 bugs (data loss, broken auth, payment placeholder errors)
 - Mobile + desktop both functional
-- Sentry error tracking live
+- Sentry error tracking live (not installed yet — see CLAUDE.md tech stack)
 - Privacy policy + terms drafted
+
+**Manual, outside the `/ship` pipeline** (SHIP_PIPELINE §10) — a human does
+these, no PR covers them:
+- the `dev` → `main` deploy
+- Supabase URL config and custom SMTP
+- Vercel environment variables (`NEXT_PUBLIC_*` is baked at build time — set
+  before the deploy build, not after)
+- the cross-device password reset test
 
 ---
 

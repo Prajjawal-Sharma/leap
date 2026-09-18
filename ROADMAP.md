@@ -1,26 +1,40 @@
 # Leap — Product Roadmap
 
-> **Vision:** Leap is the semantic job matching platform for anyone, anywhere.
-> We match candidates to opportunities based on actual fit — not keywords,
-> not pedigree, not paid visibility. India-first launch, global architecture
-> from day one.
+> **Vision:** Leap is the AI job platform for anyone, anywhere. We match
+> candidates to opportunities by meaning — what the work actually involves and
+> what the candidate can actually do — not keywords, not pedigree, not paid
+> visibility. India-first is where we launch and acquire, not what the product
+> is about; the architecture is global from day one and the copy is value-led.
 
 ---
 
-## Current State (May 2026)
+## Current State (shipped to `dev` through PR #24)
 
-**Shipped (Weeks 1-2):**
-- Authentication (email + Google OAuth via Supabase)
-- Resume upload, PDF parsing, ATS scoring with Gemini analysis
-- Profile management (current role, target search, salary expectations)
-- Greenhouse job ingestion across 25 companies (~3,800 active jobs)
-- 768-dimension semantic embeddings via Gemini Embedding 001
+**Weeks 1-2 — Foundation:**
+- Authentication (email + Google OAuth via Supabase) — PR #5
+- Resume upload, PDF parsing, ATS scoring with Gemini analysis — PR #6
+- Profile management (current role, target search, salary expectations) — PR #7
+- Greenhouse job ingestion — PR #8, audited down to 20 live company boards in
+  PR #14 (seven original slugs had never returned a job)
+- 768-dimension semantic embeddings via gemini-embedding-001
 - pgvector cosine similarity match engine
-- Personalized job feed with match scores and reasoning placeholders
-- Daily cron infrastructure for ingest + embedding refresh
+- Personalized job feed with match scores
+- Daily cron infrastructure for ingest + embedding refresh (both Vercel Hobby
+  cron slots now in use)
 
-**Tech foundation:** Next.js 15 App Router · TypeScript · Supabase (Postgres
-+ pgvector + Auth + Storage) · Gemini API (Tier 1) · Vercel · Resend.
+**Week 3 — Application Intelligence (complete):** see Phase 1 below.
+
+**Hardening shipped alongside:** embed-pipeline data-loss fixes (PR #12), job
+freshness via `last_seen_at` (PR #13), Gemini JSON validation boundary
+(PR #15), per-key model-availability rotation (PR #18), quota-driven
+single-call parse+score (PR #19), open-redirect guard (PR #20), full
+password-reset flow (PRs #21/#24), per-user daily chat cap (PR #23), marketing
+landing page (PR #22).
+
+**Tech foundation:** Next.js 16 App Router · React 19 · TypeScript · Tailwind
+v4 (CSS-first theme, no config file) · Supabase (Postgres + pgvector + Auth +
+Storage) · Gemini API (free rotation + Tier 1 paid) · Vercel Hobby.
+Resend and Sentry are planned, not yet installed.
 
 ---
 
@@ -37,9 +51,9 @@
 
 ## Phase 1 — MVP Completion (Weeks 3-4)
 
-### Week 3: Application Intelligence
+### Week 3: Application Intelligence — complete
 
-**1. Kanban Application Tracker**
+**1. Kanban Application Tracker** — ✅ **SHIPPED** (PR #10)
 - *What:* Drag-drop board with 6 columns: Saved · Applied · Viewed · Interviewing · Offered · Rejected/Withdrawn
 - *Why:* Users currently track applications in spreadsheets or Teal. Keeping
   them in Leap closes the loop and feeds our recommendation engine
@@ -50,7 +64,7 @@
   `/jobs` feed (add "Save" and "Mark as applied" buttons on JobCard).
 - *Effort:* 1.5 days
 
-**2. AI Career Chat**
+**2. AI Career Chat** — ✅ **SHIPPED** (PR #16)
 - *What:* Persistent conversation with Gemini 2.5 Flash that has full user
   context: profile, resume, applications, recently viewed jobs.
 - *Why:* Career questions are personal and contextual. ChatGPT can answer
@@ -61,8 +75,12 @@
 - *Integrates with:* All existing user data (profile, resume, applications).
   Surfaces as `/chat` route in dashboard.
 - *Effort:* 2 days
+- *As built:* streams gemini-2.5-flash on the paid Tier 1 key via the Vercel AI
+  SDK. User context is fenced as data (`chat-context.ts`) and `parsed_content`
+  is re-validated before it reaches the prompt. Capped at 30 user messages per
+  day (PR #23).
 
-**3. One-Click Tailored Resume**
+**3. One-Click Tailored Resume** — ✅ **SHIPPED** (PR #17), PDF export still outstanding
 - *What:* On any job card, "Tailor my resume for this role" button generates
   a JD-optimized version of the user's resume. Preview, edit, accept/reject.
 - *Why:* The single most-asked-for feature from candidate research. Saves
@@ -76,10 +94,43 @@
   applications tracker (auto-creates application row when user applies with
   tailored resume).
 - *Effort:* 2 days
+- *As built:* the rewrite runs on the free rotation (gemini-3.5-flash), not
+  Gemini 2.5 Pro — pro-class models are 404/429 on every key in this project.
+  Tailored versions are stored in `resumes` with `kind = 'tailored'` and a
+  `job_id`. **PDF export is not built yet** and is the one open item from
+  Week 3.
 
-### Week 4: Activation and Launch
+### Launch-gating backlog — not started
 
-**4. Daily Digest Email**
+Ordered queue from `docs/SHIP_PIPELINE.md` §10; one branch each, spec written
+from this roadmap plus that backlog. These gate launch and come before the
+Week 4 feature work.
+
+1. `fix/error-boundaries` (`#11`) — every page and the dashboard layout.
+2. `fix/reauth-on-password-change` — Supabase secure-password-change +
+   `reauthenticate()` flow.
+3. `fix/quota-proof-chat-count` — counter table migration; Clear chat no longer
+   resets the cap. (Today's cap counts `chat_messages` rows the user can
+   delete — see Pitfall 7 in CLAUDE.md.)
+4. `fix/reset-drive-by` — confirm step before `verifyOtp` when a session
+   already exists.
+5. `fix/oauth-chain` (`#13`) and `fix/parse-timeout` (`#23`).
+6. `chore/middleware-to-proxy` — `src/middleware.ts` uses the deprecated
+   convention; rename is its own PR.
+
+The `#11` / `#13` / `#23` markers refer to **July internal audit findings**,
+not GitHub issues or PRs — this repo has no issues, and PRs #11/#13/#23 are
+unrelated changes.
+
+### Week 4: Activation and Launch — not started
+
+Branch names and sequencing constraints below are from SHIP_PIPELINE §10.
+
+**4. Daily Digest Email** — `feat/digest`
+- *Blocked on a decision:* needs a **3rd cron**, but Vercel Hobby allows 2 and
+  both are used (ingest + embed). Either drop a plan upgrade in, fold the
+  digest into an existing cron, or trigger it externally — decide before
+  speccing.
 - *What:* Personalized morning email with 5-10 new matches above 70% match
   threshold, summary of application status changes, one career tip.
 - *Why:* Re-engagement loop. The marginal user signs up, browses once,
@@ -91,7 +142,7 @@
   Supabase auth (uses verified email).
 - *Effort:* 1 day
 
-**5. Insights Dashboard**
+**5. Insights Dashboard** — `feat/insights`
 - *What:* Personal analytics: skill coverage heatmap vs target roles, salary
   expectations vs market range, application funnel (sent → viewed →
   interviewed → offered), strengths and gaps.
@@ -103,7 +154,9 @@
   tracker, parsed resume skills.
 - *Effort:* 1.5 days
 
-**6. Onboarding Flow**
+**6. Onboarding Flow** — `feat/onboarding`
+- *Blocked on:* `profiles.onboarded_at` does not exist in any migration. Add it
+  (next number, idempotent, additive) before this work starts.
 - *What:* First-time user wizard: upload resume → confirm profile auto-fill
   → set target roles + locations → see first 5 matches → guided tour.
 - *Why:* First 60 seconds determines retention. Friction here kills 80% of
@@ -114,7 +167,7 @@
   re-styled as wizard steps.
 - *Effort:* 1 day
 
-**7. Mobile Responsive Pass**
+**7. Mobile Responsive Pass** — `feat/mobile-pass`
 - *What:* Every page works at 375px width. Touch targets minimum 44px.
   Kanban tracker becomes vertical list on mobile.
 - *Why:* India is mobile-first. ~70% of LinkedIn India traffic is mobile.
@@ -123,12 +176,37 @@
 - *Integrates with:* All existing pages. No new logic.
 - *Effort:* 1 day
 
+**8. Tailored Resume PDF Export** — `feat/tailored-pdf-export`
+- *What:* Export a generated tailored resume as PDF. This is the one item left
+  open from Week 3 (PR #17 shipped generate/preview/store without export).
+- *Why:* Without export the tailored resume can't actually be submitted
+  anywhere, so the feature stops one step short of the user's goal.
+- *Tech:* No PDF generation exists in the repo today — `pdf-parse` is
+  read-only, for parsing uploads. Needs a renderer chosen with the Vercel
+  serverless size limit in mind.
+
+**9. India Remote Filter** — `feat/india-remote-filter`
+- *What:* Filter the job feed to roles that are remote-friendly for
+  India-based candidates.
+- *Why:* Distribution fit for the launch market — the 20 Greenhouse boards are
+  mostly US/EU companies, so "remote" is what makes them reachable at all.
+- *Tech:* Builds on the existing `is_remote` and `location` columns on `jobs`;
+  no new source needed.
+
 **Week 4 Launch Criteria:**
 - 5 real users complete full flow: signup → onboard → upload → match → apply → track
 - Zero P0 bugs (data loss, broken auth, payment placeholder errors)
 - Mobile + desktop both functional
-- Sentry error tracking live
+- Sentry error tracking live (not installed yet — see CLAUDE.md tech stack)
 - Privacy policy + terms drafted
+
+**Manual, outside the `/ship` pipeline** (SHIP_PIPELINE §10) — a human does
+these, no PR covers them:
+- the `dev` → `main` deploy
+- Supabase URL config and custom SMTP
+- Vercel environment variables (`NEXT_PUBLIC_*` is baked at build time — set
+  before the deploy build, not after)
+- the cross-device password reset test
 
 ---
 
@@ -354,6 +432,17 @@ Critical decisions documented as we go. Key entries so far:
 - **May 2:** Upgraded GEMINI_KEY_1 to Tier 1 paid (₹1000 deposit) after free
   tier rate limits made development unviable
 - **May 13:** Phase 1 match engine shipped — semantic matching live
+- **Jul 14:** Greenhouse slug audit — 25 boards down to 20 that actually
+  return jobs; freshness now tracked via `last_seen_at`
+- **Jul 18:** Free rotation moved to gemini-3.5-flash after per-key
+  `generateContent` probes showed 2.5-flash 404s on newer free projects.
+  Chat stays pinned to gemini-2.5-flash on the paid key.
+- **Upgraded to Next.js 16 + React 19**; Tailwind v4 with a CSS-first theme and
+  no `tailwind.config`. UI primitives are hand-rolled — shadcn/ui, Framer
+  Motion and lucide were evaluated and deliberately not adopted.
+- **Positioning:** dropped the "service company to product company" framing.
+  Leap is an AI job platform that matches by meaning; India-first is
+  distribution, not copy.
 
 ---
 
@@ -367,4 +456,4 @@ Critical decisions documented as we go. Key entries so far:
 This is a living document. Edit freely. Add new ideas to the appropriate
 phase. Move features between phases as priorities shift.
 
-Updated: May 13, 2026
+Updated: September 17, 2026

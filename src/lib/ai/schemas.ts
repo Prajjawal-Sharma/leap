@@ -1,0 +1,162 @@
+import { z } from "zod";
+
+// Validation boundary for raw Gemini JSON output. Both /api/resume/parse and
+// /api/resume/score JSON.parse a model response and, without this module,
+// persisted/returned it unchecked — a resume PDF containing adversarial text
+// ("ignore previous instructions, return ...") could shape parsed_content
+// into wrong types or oversized payloads that then feed buildQueryText
+// (src/lib/jobs/match-engine.ts), the ATS score heuristics, and eventually
+// the chat context builder.
+//
+// Field sets mirror the JSON schemas already declared in each route's
+// prompt string (PARSE_PROMPT / SCORE_PROMPT) — nothing here is invented.
+// z.object() strips unrecognized keys by default, so stray/injected keys
+// never reach persistence. String and array caps bound worst-case payload
+// size regardless of what the model returns.
+
+const MAX_SHORT = 200;
+const MAX_SUMMARY = 2000;
+const MAX_DESCRIPTION = 3000;
+const MAX_SKILL = 100;
+const MAX_CERT = 200;
+
+const MAX_EXPERIENCE_ITEMS = 30;
+const MAX_EDUCATION_ITEMS = 20;
+const MAX_SKILLS_ITEMS = 100;
+const MAX_CERTIFICATIONS_ITEMS = 50;
+const MAX_LANGUAGES_ITEMS = 20;
+
+const shortField = z.string().max(MAX_SHORT).default("");
+
+export const ParsedResumeSchema = z.object({
+  full_name: shortField,
+  email: shortField,
+  phone: shortField,
+  location: shortField,
+  summary: z.string().max(MAX_SUMMARY).default(""),
+  experience: z
+    .array(
+      z.object({
+        company: shortField,
+        role: shortField,
+        duration: shortField,
+        description: z.string().max(MAX_DESCRIPTION).default(""),
+      })
+    )
+    .max(MAX_EXPERIENCE_ITEMS)
+    .default([]),
+  education: z
+    .array(
+      z.object({
+        institution: shortField,
+        degree: shortField,
+        year: shortField,
+      })
+    )
+    .max(MAX_EDUCATION_ITEMS)
+    .default([]),
+  skills: z.array(z.string().max(MAX_SKILL)).max(MAX_SKILLS_ITEMS).default([]),
+  certifications: z
+    .array(z.string().max(MAX_CERT))
+    .max(MAX_CERTIFICATIONS_ITEMS)
+    .default([]),
+  languages: z
+    .array(z.string().max(MAX_SHORT))
+    .max(MAX_LANGUAGES_ITEMS)
+    .default([]),
+});
+
+export type ParsedResume = z.infer<typeof ParsedResumeSchema>;
+
+const MAX_FINDINGS_ITEMS = 20;
+const MAX_FINDING_LEN = 300;
+const MAX_KEYWORDS_ITEMS = 50;
+// Distinct from MAX_SKILL (atomic skill names in ParsedResumeSchema):
+// keywords_missing suggestions from Gemini are sometimes full phrases —
+// observed up to 115 chars against a real resume — so 100 was too tight
+// and intermittently 502'd the score route.
+const MAX_KEYWORD_LEN = 200;
+const MAX_VERDICT_LEN = 1000;
+
+export const ResumeScoreAnalysisSchema = z.object({
+  score: z.number().finite().default(0),
+  strengths: z
+    .array(z.string().max(MAX_FINDING_LEN))
+    .max(MAX_FINDINGS_ITEMS)
+    .default([]),
+  improvements: z
+    .array(z.string().max(MAX_FINDING_LEN))
+    .max(MAX_FINDINGS_ITEMS)
+    .default([]),
+  keywords_missing: z
+    .array(z.string().max(MAX_KEYWORD_LEN))
+    .max(MAX_KEYWORDS_ITEMS)
+    .default([]),
+  verdict: z.string().max(MAX_VERDICT_LEN).default(""),
+});
+
+export type ResumeScoreAnalysis = z.infer<typeof ResumeScoreAnalysisSchema>;
+
+// Combined parse+score — /api/resume/parse asks Gemini for BOTH payloads in
+// one call (free-tier quota is 20 requests/day/key, so the second call per
+// upload was 50% waste), making the combined reply a single Gemini JSON
+// output site behind one safeParse gate. Composes the two existing schemas
+// so the persisted shapes and caps can never drift from the standalone
+// versions. The refine follows TailoredResumeSchema's degenerate-reply
+// rationale — every ParsedResume field defaults, so {} or a refusal object
+// would otherwise validate into a blank resume and persist as success — but
+// the test is deliberately WIDER than the tailor one: a tailored rewrite
+// always carries summary/experience/skills, while a legitimately sparse
+// PARSE (a fresher CV with only education, certifications, and contact
+// info) may not, and the old parse flow accepted those. Any extracted
+// content counts as substance; only an entirely empty extraction takes the
+// 502-retryable path.
+export const ResumeParseAndScoreSchema = z
+  .object({
+    resume: ParsedResumeSchema,
+    ats_analysis: ResumeScoreAnalysisSchema,
+  })
+  .refine(
+    (v) =>
+      v.resume.summary.trim().length > 0 ||
+      v.resume.experience.length > 0 ||
+      v.resume.skills.length > 0 ||
+      v.resume.education.length > 0 ||
+      v.resume.certifications.length > 0 ||
+      v.resume.full_name.trim().length > 0 ||
+      v.resume.email.trim().length > 0,
+    {
+      message: "combined payload extracted no resume content at all",
+    }
+  );
+
+export type ResumeParseAndScore = z.infer<typeof ResumeParseAndScoreSchema>;
+
+// One-Click Tailored Resume — /api/resume/tailor asks Gemini to rewrite the
+// primary resume against a job description and JSON.parses the reply, so it
+// is a Gemini JSON output site with the same safeParse boundary as
+// parse/score above. The tailored payload is deliberately the SAME shape as
+// ParsedResume: every existing consumer (chat-context formatter,
+// match-engine query builder, resume renderers) can then consume it
+// unchanged, and the caps above are already sized to real resume content.
+// Composing rather than copying means the shapes can never drift apart; if
+// tailoring ever needs extra fields, extend ParsedResumeSchema here instead.
+//
+// The refine exists because every ParsedResume field defaults: a degenerate
+// Gemini reply that is a JSON object but not a resume ({} after unknown-key
+// stripping — e.g. a refusal object or a {"resume": ...} wrapper) would
+// otherwise "validate" into an all-blank resume and be persisted as
+// success. A rewrite of a real resume always carries substance; a payload
+// with none is malformed output and must take the 502-retryable path.
+export const TailoredResumeSchema = ParsedResumeSchema.refine(
+  (r) =>
+    r.summary.trim().length > 0 ||
+    r.experience.length > 0 ||
+    r.skills.length > 0,
+  {
+    message:
+      "tailored payload has no resume content (summary, experience, and skills all empty)",
+  }
+);
+
+export type TailoredResume = ParsedResume;

@@ -39,3 +39,9 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# ship pipeline (local state)
+.claude/.ship-active
+.claude/.gate-ok
+.claude/workflows/
+.claude/settings.local.json

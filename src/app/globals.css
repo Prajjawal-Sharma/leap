@@ -1,12 +1,18 @@
 @import "tailwindcss";
 @import "tw-animate-css";
-@import "shadcn/tailwind.css";
+@import "./shadcn-variants.css";
 
 /* Class-based theming: `.dark` on <html> (or on a panel in /dev/ui) flips the
-   palette. `:where()` keeps specificity at zero and — unlike `:is(.dark *)` —
-   matches the element carrying the class as well as its descendants, which is
-   what lets the gallery render a .light and a .dark panel side by side. */
-@custom-variant dark (&:where(.dark, .dark *));
+   palette. `:where()` keeps specificity at zero and matches the element
+   carrying the class as well as its descendants.
+
+   The `:not(...)` is what makes the side-by-side gallery honest. The app runs
+   with `.dark` on <html>, so a `.light` panel nested inside it is still a
+   `.dark *` descendant — without this, every `dark:` utility inside the light
+   panel would fire and the panel would quietly render dark-theme styling on
+   light tokens. Excluding `.light` subtrees re-scopes the variant to the
+   nearest theme ancestor, which is what `dark:` is supposed to mean. */
+@custom-variant dark (&:where(.dark, .dark *):not(:where(.light, .light *)));
 
 /* ---------------------------------------------------------------------------
    Colour — docs/DESIGN.md §5.1. Hex exactly as the table gives it (the spec
@@ -122,6 +128,7 @@
 
   --glass-blur: 20px;
   --glass-saturate: 180%;
+  --glass-border: 1px solid var(--border);
 
   /* Motion — DESIGN §5.5. */
   --dur-1: 120ms; /* hover, tooltips, fades */
@@ -291,7 +298,7 @@
   background-color: var(--glass-bg);
   -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
   backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
-  border: 1px solid var(--border);
+  border: var(--glass-border);
   box-shadow: var(--glass-highlight), var(--glass-shadow);
 }
 
@@ -331,8 +338,30 @@
   }
 }
 
+/* Reduced motion — DESIGN §5.5: transitions are opacity-only, nothing scales
+   or translates. Scoped to component subtrees rather than `*` so unmigrated
+   pages keep the exact behaviour they have in production; every shadcn and
+   Base UI root carries data-slot, and src/components/features and
+   src/components/landing use it nowhere (verified: 0 occurrences).
+
+   transform itself is deliberately NOT reset — dialogs centre themselves with
+   -translate-x-1/2, and clearing that would throw them off screen. Removing
+   the transition is what stops the movement. */
+@media (prefers-reduced-motion: reduce) {
+  :where([data-slot]),
+  :where([data-slot]) * {
+    animation: none !important;
+    transition-property: opacity !important;
+  }
+}
+
 @layer base {
-  * {
+  /* shadcn components lean on a default border colour — the sheet's bare
+     `border-t`, for one. Scoped for the same reason as the block above: the
+     spec calls out this exact rule as a visual-regression risk for pages that
+     have not migrated yet. */
+  :where([data-slot]),
+  :where([data-slot]) * {
     @apply border-border outline-ring/50;
   }
 

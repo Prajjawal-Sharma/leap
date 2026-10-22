@@ -25,7 +25,10 @@ type FitMeterProps = {
   size?: FitMeterSize;
   /** Hides the "%" — the lg ATS score reads as a bare number. */
   showSuffix?: boolean;
-  /** Overrides the default "68% fit". */
+  /**
+   * Overrides the default "68% fit". Required in practice wherever the number
+   * is not a fit percentage — the lg ATS score, for one.
+   */
   label?: string;
   className?: string;
 };
@@ -54,7 +57,9 @@ export function FitMeter({
   return (
     <div
       role="img"
-      aria-label={label ?? `${percent}% fit`}
+      // `??` would let an empty or whitespace-only label through and ship a
+      // role="img" with no accessible name.
+      aria-label={label?.trim() || `${percent}% fit`}
       className={cn("relative inline-flex shrink-0", className)}
       style={{ width: box, height: box }}
     >
@@ -79,7 +84,9 @@ export function FitMeter({
           r={radius}
           fill="none"
           strokeWidth={stroke}
-          strokeLinecap="round"
+          // Round caps add half a stroke at each end, which turns a 0% arc
+          // into a visible dot at twelve o'clock — the dotted-line trick.
+          strokeLinecap={percent === 0 ? "butt" : "round"}
           strokeDasharray={fitDashArray(percent, radius)}
           className="stroke-brand-text transition-[stroke-dasharray] duration-[var(--dur-spring)] ease-spring motion-reduce:transition-none"
         />

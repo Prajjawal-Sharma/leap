@@ -20,10 +20,14 @@ export const COMPANY_MARK_FALLBACK = "?";
  * and a non-Latin name ("株式会社…") keeps its first character. Uppercasing can
  * expand one character into several ("ß" -> "SS"); only the first survives,
  * because the tile has room for exactly one.
+ *
+ * Modifier letters (\p{Lm}) are deliberately excluded from \p{L}: a name led by
+ * a modifier such as U+02BC or an Arabic tatweel would otherwise tile the
+ * modifier on its own, which renders as a stray mark rather than an initial.
  */
 export function companyInitial(name: string): string {
   for (const character of name) {
-    if (/\p{L}|\p{N}/u.test(character)) {
+    if (/\p{Lu}|\p{Ll}|\p{Lt}|\p{Lo}|\p{N}/u.test(character)) {
       return Array.from(character.toUpperCase())[0] ?? COMPANY_MARK_FALLBACK;
     }
   }
@@ -31,11 +35,18 @@ export function companyInitial(name: string): string {
 }
 
 /**
- * Stable tint for a name. Case and surrounding whitespace are normalised first
- * so "MongoDB" and " mongodb " land on the same tile.
+ * Stable tint for a name. Case, surrounding whitespace, Unicode composition and
+ * invisible formatting characters are all normalised first, so "MongoDB",
+ * " mongodb " and a decomposed "Café Co" vs a precomposed one land on the same
+ * tile — two job boards spelling a company differently must not produce two
+ * different colours.
  */
 export function companyTint(name: string): CompanyMarkTint {
-  const key = name.trim().toLowerCase();
+  const key = name
+    .normalize("NFC")
+    .replace(/\p{Cf}/gu, "")
+    .trim()
+    .toLowerCase();
   let hash = 0;
   for (let i = 0; i < key.length; i += 1) {
     // |0 keeps this in int32 the whole way, so the result cannot drift with

@@ -15,12 +15,19 @@ export type FitMeterSize = keyof typeof FIT_METER_SIZES;
 
 /**
  * A fit percentage is always a whole number in 0–100. Scores arrive from the
- * match engine and from Gemini, so NaN and out-of-range values are expected
- * rather than exceptional; they clamp instead of throwing.
+ * match engine and from Gemini, so out-of-range and non-numeric values are
+ * expected rather than exceptional; they clamp instead of throwing.
+ *
+ * Coerced rather than trusted: PostgREST serialises a Postgres `numeric` as a
+ * JSON *string*, so a column type change upstream would otherwise render every
+ * score as 0 with nothing in TypeScript to catch it. Only genuinely
+ * meaningless input (NaN, null, a non-numeric string) falls back to 0;
+ * ±Infinity clamps to the end it is actually nearest.
  */
 export function clampFit(value: number): number {
-  if (!Number.isFinite(value)) return 0;
-  return Math.min(100, Math.max(0, Math.round(value)));
+  const parsed = typeof value === "number" ? value : Number(value);
+  if (Number.isNaN(parsed)) return 0;
+  return Math.min(100, Math.max(0, Math.round(parsed)));
 }
 
 /** Radius of the stroked ring, inset so the stroke stays inside the box. */

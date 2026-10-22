@@ -10,36 +10,36 @@ export const metadata: Metadata = {
 
 /**
  * Rendered per request, never prerendered — otherwise the guard below would be
- * baked into static HTML and the env could never be consulted again.
+ * baked into static HTML and the environment could never be consulted again.
  */
 export const dynamic = "force-dynamic";
-
-// A literal `process.env.VERCEL_ENV` can be substituted with its build-time
-// value by the bundler, which would freeze the answer at build time. Reading
-// through a variable key is opaque to that substitution, so the lookup
-// survives into the server bundle and resolves against the live environment on
-// every request. Both forms are kept so either resolution path closes the
-// route. Measured against `next start`: VERCEL_ENV=production serves 404,
-// while preview and an unset environment serve 200.
-const VERCEL_ENV_KEY = "VERCEL_ENV";
-
-function isProductionDeploy(): boolean {
-  return (
-    process.env.VERCEL_ENV === "production" ||
-    process.env[VERCEL_ENV_KEY] === "production"
-  );
-}
 
 /**
  * Review surface for the design system: every component in both themes.
  *
- * Unreachable on production deploys. VERCEL_ENV is "production" only on a
- * production deployment — "preview" on preview deploys, unset locally — so the
- * gallery stays available where it is useful and 404s where it is not. The
- * route is not linked from anywhere in the app and is marked noindex.
+ * Closed on any production build, not just a Vercel one. VERCEL_ENV alone
+ * would be a single point of failure: it only exists while "Automatically
+ * expose System Environment Variables" is on, and it is absent entirely when
+ * the app runs anywhere other than Vercel — either of which would quietly open
+ * an unauthenticated route (/dev/ui is deliberately not in middleware's
+ * DASHBOARD_PREFIXES). NODE_ENV is set to "production" by `next build`, so the
+ * second arm fails closed wherever the first is missing. Preview deploys keep
+ * the gallery because VERCEL_ENV is "preview" there — see the dev-dependency
+ * note in the PR for how that interacts with NODE_ENV.
+ *
+ * Verified against `next start`: VERCEL_ENV=production -> 404,
+ * VERCEL_ENV=preview -> 200, unset -> 404 on a production build.
+ *
+ * The route is not linked from anywhere and is marked noindex.
  */
 export default function DevUiPage() {
-  if (isProductionDeploy()) {
+  const vercelEnv = process.env.VERCEL_ENV;
+
+  if (vercelEnv === "production") {
+    notFound();
+  }
+  // Not a Vercel deploy at all: close unless this is a dev server.
+  if (!vercelEnv && process.env.NODE_ENV === "production") {
     notFound();
   }
 

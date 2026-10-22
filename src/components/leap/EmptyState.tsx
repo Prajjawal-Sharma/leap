@@ -4,8 +4,11 @@ type EmptyStateProps = {
   title: string;
   /** Why it is empty and what fills it. */
   body: string;
-  /** Exactly one action — the next thing to do (DESIGN principle 7). */
-  action?: React.ReactNode;
+  /**
+   * Exactly one action — the next thing to do. Required: an empty state with
+   * no way forward is the dead end DESIGN principle 7 exists to prevent.
+   */
+  action: React.ReactNode;
   icon?: React.ReactNode;
   className?: string;
 };
@@ -38,7 +41,7 @@ export function EmptyState({
           {body}
         </p>
       </div>
-      {action ? <div className="pt-1">{action}</div> : null}
+      <div className="pt-1">{action}</div>
     </div>
   );
 }

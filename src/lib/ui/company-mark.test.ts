@@ -36,6 +36,24 @@ describe("companyInitial — one letter or digit, uppercased", () => {
     assert.equal(Array.from(companyInitial("ßeta")).length, 1);
   });
 
+  // Modifier letters are not initials — tiling one renders a stray mark.
+  it("steps past a leading modifier letter", () => {
+    assert.equal(companyInitial("\u02bcAcme"), "A");
+    assert.equal(companyInitial("\u0640Acme"), "A");
+  });
+
+  it("steps past combining marks and invisible characters", () => {
+    assert.equal(companyInitial("\u0301Acme"), "A");
+    assert.equal(companyInitial("\u200b\u200bAcme"), "A");
+    assert.equal(companyInitial("\ufeffAcme"), "A");
+  });
+
+  it("survives a lone surrogate", () => {
+    assert.equal(companyInitial("\ud800Acme"), "A");
+    assert.equal(companyInitial("\udc00Acme"), "A");
+    assert.equal(companyInitial("\ud800"), COMPANY_MARK_FALLBACK);
+  });
+
   it("falls back when there is no letter or digit", () => {
     assert.equal(companyInitial(""), COMPANY_MARK_FALLBACK);
     assert.equal(companyInitial("   "), COMPANY_MARK_FALLBACK);
@@ -70,5 +88,15 @@ describe("companyTint — stable and evenly spread", () => {
 
   it("handles a name with no letters at all", () => {
     assert.ok(COMPANY_MARK_TINTS.includes(companyTint("---")));
+  });
+
+  // Two boards spelling one company differently must not get two colours.
+  it("is stable across Unicode composition", () => {
+    assert.equal(companyTint("Caf\u00e9 Co"), companyTint("Cafe\u0301 Co"));
+  });
+
+  it("ignores invisible formatting characters", () => {
+    assert.equal(companyTint("\u200bMongoDB"), companyTint("MongoDB"));
+    assert.equal(companyTint("Mongo\u200dDB"), companyTint("MongoDB"));
   });
 });

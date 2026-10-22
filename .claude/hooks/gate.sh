@@ -70,10 +70,10 @@ check_tokens() {
   fi
 
   # globals.css is where the literals are supposed to live.
-  files=$(find "${present[@]}" -type f \
-            \( -name '*.ts' -o -name '*.tsx' -o -name '*.css' \) \
-            ! -name 'globals.css' | sort)
-  if [ -z "$files" ]; then
+  local find_args=(-type f \
+                   \( -name '*.ts' -o -name '*.tsx' -o -name '*.css' \) \
+                   ! -name 'globals.css')
+  if [ "$(find "${present[@]}" "${find_args[@]}" | wc -l)" -eq 0 ]; then
     echo "   no files to check"
     return 0
   fi
@@ -87,10 +87,16 @@ check_tokens() {
   # function, or a palette name) so w-[256px] and text-[15px] never match.
   local rules=(
     "hex literal|#[0-9a-fA-F]{3,8}([^0-9a-zA-Z_-]|$)"
-    "colour function|(rgba?|hsla?|oklch|oklab)\("
+    "colour function|(rgba?|hsla?|oklch|oklab|lab|lch|hwb)\("
     "arbitrary colour|-\[#"
     "palette class|(^|[^a-zA-Z0-9_-])($prefixes)-(($palette)(-(50|[1-9]00|950))?|white|black)([^a-zA-Z0-9_-]|$)"
   )
+
+  # Named and system colours inside an arbitrary value — bg-[red],
+  # text-[Canvas]. Only colour-capable prefixes, only bare words, and the
+  # CSS-wide keywords pass, so w-[auto] and grid-cols-[subgrid] stay clear.
+  local keyword_rule="($prefixes)-\[[a-zA-Z]+\]"
+  local keyword_allow='-\[(inherit|initial|unset|revert|none|auto|transparent|currentColor|currentcolor|subgrid|min|max|fit|full)\]'
 
   local rule label pattern
   for rule in "${rules[@]}"; do
@@ -99,12 +105,24 @@ check_tokens() {
     # -e matters: the arbitrary-colour pattern starts with "-" and would
     # otherwise be read as grep options. -H keeps the file:line prefix
     # even when the hit list is a single file.
-    hits=$(printf '%s\n' "$files" | xargs grep -HnE -e "$pattern" 2>/dev/null)
+    # -exec ... + rather than xargs: a path containing a space or a
+    # newline would be word-split by xargs, grep's error swallowed by
+    # 2>/dev/null, and that file silently skipped.
+    hits=$(find "${present[@]}" "${find_args[@]}" \
+             -exec grep -HnE -e "$pattern" {} + 2>/dev/null)
     if [ -n "$hits" ]; then
       printf '%s\n' "$hits" | sed "s/^/   $label: /"
       rc=1
     fi
   done
+
+  hits=$(find "${present[@]}" "${find_args[@]}" \
+           -exec grep -HnE -e "$keyword_rule" {} + 2>/dev/null \
+         | grep -vE -e "$keyword_allow")
+  if [ -n "$hits" ]; then
+    printf '%s\n' "$hits" | sed "s/^/   named colour: /"
+    rc=1
+  fi
 
   if [ "$rc" -ne 0 ]; then
     echo "   Fix: use a semantic token (bg-card, text-muted-foreground, bg-scrim)."

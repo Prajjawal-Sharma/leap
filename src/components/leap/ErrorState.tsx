@@ -10,7 +10,8 @@ type ErrorStateProps = {
   title?: string;
   /** How to fix it — DESIGN §8 copy rule: errors say what to do next. */
   body?: string;
-  onRetry?: () => void;
+  /** Required: an error with no way to recover is a dead end. */
+  onRetry: () => void;
   retryLabel?: string;
   className?: string;
 };
@@ -40,12 +41,10 @@ export function ErrorState({
           {body}
         </p>
       </div>
-      {onRetry ? (
-        <Button variant="outline" onClick={onRetry} className="mt-1">
-          <RotateCcwIcon aria-hidden />
-          {retryLabel}
-        </Button>
-      ) : null}
+      <Button variant="outline" onClick={onRetry} className="mt-1">
+        <RotateCcwIcon aria-hidden />
+        {retryLabel}
+      </Button>
     </div>
   );
 }

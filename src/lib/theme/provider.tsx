@@ -79,8 +79,19 @@ function getServerResolvedTheme(): "light" | "dark" {
   return FORCED_THEME ?? "dark";
 }
 
+/**
+ * Read from storage, not from the class on <html>. A `storage` event means
+ * another tab changed the *stored* value; this tab's DOM class has not moved
+ * yet, so a class-based snapshot would be unchanged, no re-render would fire,
+ * and the two tabs would drift apart.
+ */
 function readSolid(): boolean {
-  return document.documentElement.classList.contains("solid");
+  try {
+    return localStorage.getItem(SOLID_KEY) === "1";
+  } catch {
+    // Safari in private mode: fall back to whatever the pre-paint script did.
+    return document.documentElement.classList.contains("solid");
+  }
 }
 
 function getServerSolid(): boolean {
@@ -175,12 +186,20 @@ export function useTheme(): ThemeContextValue {
 export function useSolidSurfaces(): [boolean, (next: boolean) => void] {
   const solid = useSyncExternalStore(subscribe, readSolid, getServerSolid);
 
+  // Reconcile the class with the stored value. On mount the pre-paint script
+  // has normally already set it, so this is a no-op; it earns its keep when
+  // another tab flips the setting.
+  useEffect(() => {
+    document.documentElement.classList.toggle("solid", solid);
+  }, [solid]);
+
   const setSolid = useCallback((next: boolean) => {
-    document.documentElement.classList.toggle("solid", next);
     try {
       localStorage.setItem(SOLID_KEY, next ? "1" : "0");
     } catch {
-      // Private mode: the choice just will not survive a reload.
+      // Private mode: the choice just will not survive a reload. Toggle the
+      // class directly, since the storage read above cannot report it back.
+      document.documentElement.classList.toggle("solid", next);
     }
     notify();
   }, []);

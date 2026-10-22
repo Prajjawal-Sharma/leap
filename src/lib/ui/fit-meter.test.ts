@@ -24,9 +24,31 @@ describe("clampFit — scores land in 0-100 as whole numbers", () => {
 
   // The match engine and Gemini both feed this; neither guarantees a number.
   it("treats NaN as 0", () => assert.equal(clampFit(Number.NaN), 0));
-  it("treats Infinity as 0", () => {
-    assert.equal(clampFit(Number.POSITIVE_INFINITY), 0);
+
+  // Infinity is out of range, not meaningless — it clamps to the end it is
+  // nearest, like any other out-of-range value.
+  it("clamps Infinity to the nearer bound", () => {
+    assert.equal(clampFit(Number.POSITIVE_INFINITY), 100);
     assert.equal(clampFit(Number.NEGATIVE_INFINITY), 0);
+  });
+
+  // PostgREST serialises a Postgres numeric as a JSON string. ats_score is
+  // int today, so this is a guard against a column-type change upstream
+  // silently turning every score into 0.
+  it("coerces a numeric string", () => {
+    assert.equal(clampFit("82" as unknown as number), 82);
+    assert.equal(clampFit("67.5" as unknown as number), 68);
+  });
+
+  it("treats null, undefined and non-numeric strings as 0", () => {
+    assert.equal(clampFit(null as unknown as number), 0);
+    assert.equal(clampFit(undefined as unknown as number), 0);
+    assert.equal(clampFit("not a score" as unknown as number), 0);
+  });
+
+  it("never returns -0", () => {
+    assert.ok(!Object.is(clampFit(-0), -0));
+    assert.ok(!Object.is(clampFit(-0.4), -0));
   });
 });
 

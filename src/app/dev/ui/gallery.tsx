@@ -81,8 +81,10 @@ import {
 } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { Toaster } from "@/components/ui/sonner";
+import { Toggle } from "@/components/ui/toggle";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useSolidSurfaces } from "@/lib/theme/provider";
@@ -144,6 +146,8 @@ const MOTION_ROWS = [
 ];
 
 const COMPANIES = ["Squarespace", "MongoDB", "Airbnb", "Klarna"];
+
+const SEGMENTS = ["light", "dark", "system"];
 
 /* -------------------------------------------------------------------------- */
 
@@ -280,6 +284,8 @@ function Panel({ theme }: { theme: "light" | "dark" }) {
           </div>
 
           <Row>
+            <Toggle aria-label="Remote only">Remote</Toggle>
+
             <Button
               variant={saved ? "secondary" : "outline"}
               onClick={() => setSaved((value) => !value)}
@@ -298,17 +304,26 @@ function Panel({ theme }: { theme: "light" | "dark" }) {
               <Label htmlFor={`${theme}-notify`}>{notify ? "On" : "Off"}</Label>
             </div>
 
-            {/* Segmented control — the thumb travels on the spring. */}
+            {/* Segmented control: one thumb that actually travels, on the
+                spring, so the overshoot in --ease-spring is visible. */}
             <ToggleGroup
               value={[segment]}
               onValueChange={(value) => setSegment(value[0] ?? segment)}
-              className="rounded-sm bg-muted p-0.5"
+              className="relative rounded-sm bg-muted p-0.5"
             >
-              {["light", "dark", "system"].map((option) => (
+              <span
+                aria-hidden
+                className="absolute top-0.5 bottom-0.5 left-0.5 rounded-sm bg-seg-thumb shadow-sm transition-transform duration-[var(--dur-spring)] ease-spring motion-reduce:transition-none"
+                style={{
+                  width: `calc((100% - 4px) / ${SEGMENTS.length})`,
+                  transform: `translateX(${SEGMENTS.indexOf(segment) * 100}%)`,
+                }}
+              />
+              {SEGMENTS.map((option) => (
                 <ToggleGroupItem
                   key={option}
                   value={option}
-                  className="h-9 rounded-sm px-3 text-body-sm capitalize transition-[background-color,transform] duration-[var(--dur-spring)] ease-spring aria-pressed:bg-seg-thumb aria-pressed:shadow-sm motion-reduce:transition-none"
+                  className="relative z-10 h-10 rounded-sm bg-transparent px-3 text-body-sm capitalize hover:bg-transparent md:h-8"
                 >
                   {option}
                 </ToggleGroupItem>
@@ -317,22 +332,10 @@ function Panel({ theme }: { theme: "light" | "dark" }) {
           </Row>
 
           <Row>
-            <Badge>
-              <span className="size-1.5 rounded-full bg-brand-text" aria-hidden />
-              Applied · 15 Jul
-            </Badge>
-            <Badge>
-              <span className="size-1.5 rounded-full bg-warning" aria-hidden />
-              Interviewing
-            </Badge>
-            <Badge>
-              <span className="size-1.5 rounded-full bg-success" aria-hidden />
-              Offered
-            </Badge>
-            <Badge>
-              <span className="size-1.5 rounded-full bg-faint" aria-hidden />
-              Viewed · 15 May
-            </Badge>
+            <Badge dot status="brand">Applied · 15 Jul</Badge>
+            <Badge dot status="warning">Interviewing</Badge>
+            <Badge dot status="success">Offered</Badge>
+            <Badge dot status="neutral">Viewed · 15 May</Badge>
             <Badge className="text-brand-text">Resume tailored</Badge>
             <Badge className="text-muted-foreground">Soon</Badge>
           </Row>
@@ -363,6 +366,20 @@ function Panel({ theme }: { theme: "light" | "dark" }) {
             </div>
           </div>
 
+          <Tabs defaultValue="overlap">
+            <TabsList>
+              <TabsTrigger value="overlap">Skill overlap</TabsTrigger>
+              <TabsTrigger value="about">About</TabsTrigger>
+            </TabsList>
+            <TabsContent value="overlap" className="pt-3 text-body-sm text-muted-foreground">
+              Resume skills found in this description, and what it asks for
+              that the resume does not show.
+            </TabsContent>
+            <TabsContent value="about" className="pt-3 text-body-sm text-muted-foreground">
+              Description at reading width.
+            </TabsContent>
+          </Tabs>
+
           <Separator />
         </Section>
 
@@ -370,7 +387,7 @@ function Panel({ theme }: { theme: "light" | "dark" }) {
           <div className="flex flex-wrap items-center gap-5">
             <FitMeter value={68} size="xs" />
             <FitMeter value={67} size="md" />
-            <FitMeter value={82} size="lg" showSuffix={false} />
+            <FitMeter value={82} size="lg" showSuffix={false} label="ATS score 82 out of 100" />
             <div className="text-body-sm">
               <div className="text-title-3 text-foreground">ATS score</div>
               <div className="text-muted-foreground">

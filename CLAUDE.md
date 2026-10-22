@@ -21,10 +21,12 @@ Production: https://leap-five-delta.vercel.app
   plus an `@theme inline` block in `src/app/globals.css`. There is **no**
   `tailwind.config` file in this repo; do not create one. PostCSS loads
   `@tailwindcss/postcss`.
-- Components: hand-rolled Tailwind under `src/components/features/` and
-  `src/components/landing/`. **shadcn/ui, Framer Motion, and lucide-react are
-  not installed** and should not be added — build primitives by hand and match
-  the existing files.
+- Components: UI is moving to shadcn/ui on Base UI primitives (src/components/ui,
+  added in UI PR 1) plus Leap components in src/components/leap, following
+  docs/DESIGN.md (approved 22 Oct 2026). Icons: lucide-react. `motion` only
+  lazy-loaded for layout animations; `react-markdown` only in the chat PR.
+  Hand-rolled components in src/components/features and src/components/landing
+  stay until their page is migrated.
 - Database: Supabase (Postgres + pgvector + Auth + Storage)
 - AI: Gemini API — see "Model & key routing" below
 - Embeddings: gemini-embedding-001, 768 dimensions, RETRIEVAL_DOCUMENT for
@@ -43,18 +45,13 @@ Production: https://leap-five-delta.vercel.app
   convention; the rename to `proxy.ts` is tracked as its own change
   (`chore/middleware-to-proxy`), not something to fold into an unrelated PR.
 
-## Brand Tokens
-- Page background: `#0a0a0a` (also the dark-mode `--background` in `globals.css`)
-- Surfaces / cards / inputs: `bg-neutral-900/60` with `ring-1 ring-white/10`
-- Primary: `#6366f1` — hover `#5458e0`
-- Muted text on dark: `text-neutral-300` / `text-neutral-400` (also `text-neutral-500`)
-
-Tokens are used as literal arbitrary Tailwind values (`bg-[#6366f1]`,
-`ring-[#6366f1]/40`) because there is no config file to extend.
-
-Geist is loaded in `layout.tsx` and mapped to `--font-sans`, but `globals.css`
-sets `body { font-family: Arial, Helvetica, sans-serif }` — so the body renders
-in Arial by accident. Put `font-sans` on new surfaces to get Geist.
+## Design system
+docs/DESIGN.md is the source of truth for tokens, components, motion, layout
+and the release bar (§9.1); mockup exports live in docs/design/. Migrated code
+uses semantic tokens only (bg-card, text-muted-foreground, …), enforced by a
+token check that UI PR 1 adds to gate.sh. Legacy literal values (#0a0a0a,
+#6366f1, neutral-*) remain only in pages not yet migrated. The app is forced
+dark until UI PR 7. UI PR 1 replaces Geist with the system font stack.
 
 ## Model & key routing
 There are three distinct call paths into Gemini. They are not interchangeable.
@@ -170,6 +167,8 @@ onboarding flow, mobile pass) has not started.
 ## Agent Instructions
 - Read this file at the start of every session
 - Read ROADMAP.md for feature context
+- Before any UI change, read docs/DESIGN.md and look at the images in
+  docs/design/.
 - Prefer editing existing files over creating new abstractions
 - After every task: run `npx tsc --noEmit` and `npm run lint`, report results
 - Output a standard summary: files created, files modified, key decisions,

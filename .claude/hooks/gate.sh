@@ -52,7 +52,72 @@ SECTIONS
 }
 # ------------------------------------------------------------------------------
 
+# --- design tokens ------------------------------------------------------------
+# Migrated UI uses semantic tokens only (docs/DESIGN.md §10 rule 2). Literal
+# colours are invisible in review and silently break the other theme, so they
+# fail the gate the same way a red test does. Page PRs append their own
+# directories here as they migrate.
+UI_TOKEN_PATHS=(src/components/ui src/components/leap src/app/dev)
+
+check_tokens() {
+  local present=() path files rc=0 hits
+  for path in "${UI_TOKEN_PATHS[@]}"; do
+    [ -e "$path" ] && present+=("$path")
+  done
+  if [ ${#present[@]} -eq 0 ]; then
+    echo "   no token-checked paths present yet"
+    return 0
+  fi
+
+  # globals.css is where the literals are supposed to live.
+  files=$(find "${present[@]}" -type f \
+            \( -name '*.ts' -o -name '*.tsx' -o -name '*.css' \) \
+            ! -name 'globals.css' | sort)
+  if [ -z "$files" ]; then
+    echo "   no files to check"
+    return 0
+  fi
+
+  local prefixes='bg|text|border|ring|fill|stroke|outline|from|via|to|shadow|divide|placeholder|decoration'
+  local palette='slate|gray|zinc|neutral|stone|red|orange|amber|yellow|lime|green|emerald|teal|cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose'
+
+  # Each rule is "label|ERE". Anchoring on a non-identifier character keeps
+  # token utilities such as bg-mk-teal-bg and text-muted-foreground clear of
+  # the palette rule, and every rule needs a colour marker (#, a colour
+  # function, or a palette name) so w-[256px] and text-[15px] never match.
+  local rules=(
+    "hex literal|#[0-9a-fA-F]{3,8}([^0-9a-zA-Z_-]|$)"
+    "colour function|(rgba?|hsla?|oklch|oklab)\("
+    "arbitrary colour|-\[#"
+    "palette class|(^|[^a-zA-Z0-9_-])($prefixes)-(($palette)(-(50|[1-9]00|950))?|white|black)([^a-zA-Z0-9_-]|$)"
+  )
+
+  local rule label pattern
+  for rule in "${rules[@]}"; do
+    label=${rule%%|*}
+    pattern=${rule#*|}
+    # -e matters: the arbitrary-colour pattern starts with "-" and would
+    # otherwise be read as grep options. -H keeps the file:line prefix
+    # even when the hit list is a single file.
+    hits=$(printf '%s\n' "$files" | xargs grep -HnE -e "$pattern" 2>/dev/null)
+    if [ -n "$hits" ]; then
+      printf '%s\n' "$hits" | sed "s/^/   $label: /"
+      rc=1
+    fi
+  done
+
+  if [ "$rc" -ne 0 ]; then
+    echo "   Fix: use a semantic token (bg-card, text-muted-foreground, bg-scrim)."
+    echo "   Colour literals belong in src/app/globals.css and nowhere else."
+    return 1
+  fi
+  echo "   tokens only: ${present[*]}"
+  return 0
+}
+# ------------------------------------------------------------------------------
+
 run "doc-sync" check_doc_sync
+run "tokens"  check_tokens
 run "tsc"    npx tsc --noEmit
 run "eslint" npx eslint src --max-warnings=0
 run "tests"  npm test --silent

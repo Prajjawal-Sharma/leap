@@ -95,6 +95,9 @@ check_tokens() {
   # Named and system colours inside an arbitrary value — bg-[red],
   # text-[Canvas]. Only colour-capable prefixes, only bare words, and the
   # CSS-wide keywords pass, so w-[auto] and grid-cols-[subgrid] stay clear.
+  # Matched with -o and filtered per hit, not per line: filtering whole lines
+  # let `bg-[red] w-[auto]` through, because the allowed keyword suppressed
+  # the violation sharing its line.
   local keyword_rule="($prefixes)-\[[a-zA-Z]+\]"
   local keyword_allow='-\[(inherit|initial|unset|revert|none|auto|transparent|currentColor|currentcolor|subgrid|min|max|fit|full)\]'
 
@@ -117,7 +120,7 @@ check_tokens() {
   done
 
   hits=$(find "${present[@]}" "${find_args[@]}" \
-           -exec grep -HnE -e "$keyword_rule" {} + 2>/dev/null \
+           -exec grep -oHnE -e "$keyword_rule" {} + 2>/dev/null \
          | grep -vE -e "$keyword_allow")
   if [ -n "$hits" ]; then
     printf '%s\n' "$hits" | sed "s/^/   named colour: /"

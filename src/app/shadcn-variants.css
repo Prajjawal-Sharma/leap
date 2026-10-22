@@ -12,7 +12,9 @@
  * be dropped. Vendoring also matches how shadcn ships components in the first
  * place — copied into the repo, ours to own (DESIGN §3).
  *
- * Re-copy from node_modules/shadcn/dist/tailwind.css when upgrading the CLI.
+ * To refresh: npx shadcn@<version> init in a scratch project and copy
+ * dist/tailwind.css from its node_modules. The package is deliberately not a
+ * dependency here, so there is no local copy to diff against.
  * Excluded from the token gate: it is third-party CSS, not Leap UI code.
  */
 

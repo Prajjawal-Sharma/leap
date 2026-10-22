@@ -10,8 +10,13 @@
    with `.dark` on <html>, so a `.light` panel nested inside it is still a
    `.dark *` descendant — without this, every `dark:` utility inside the light
    panel would fire and the panel would quietly render dark-theme styling on
-   light tokens. Excluding `.light` subtrees re-scopes the variant to the
-   nearest theme ancestor, which is what `dark:` is supposed to mean. */
+   light tokens.
+
+   This handles one level of nesting, not arbitrary alternation: a `.dark`
+   panel inside a `.light` panel inside `html.dark` would get the dark
+   *tokens* but not the `dark:` *utilities*. The gallery renders its panels as
+   siblings, so that case does not arise; a future nested-theme surface would
+   need a different mechanism. */
 @custom-variant dark (&:where(.dark, .dark *):not(:where(.light, .light *)));
 
 /* ---------------------------------------------------------------------------
@@ -318,8 +323,10 @@
   border-top: 1px solid var(--border);
 }
 
-/* Press feedback — DESIGN §5.5. transform and opacity only; under reduced
-   motion the scale is dropped and only the fill remains. */
+/* Press feedback — DESIGN §5.5. transform and opacity only. The nested
+   reduced-motion branch keeps the fill on a bare `.press` element; on a
+   [data-slot] component the global block above supersedes it and the fill
+   snaps too, which is the behaviour the spec asks for. */
 @utility press {
   transition:
     transform var(--dur-2) var(--ease-out),
@@ -352,6 +359,11 @@
   :where([data-slot]) * {
     animation: none !important;
     transition-property: opacity !important;
+    /* Base UI waits on getAnimations() before unmounting a popup. The Drawer
+       keeps a 1 -> 0.9999 opacity sentinel on its closing style, so leaving
+       the duration alone would hold the unmount for the full 450ms after the
+       panel had already snapped away. */
+    transition-duration: 0.01ms !important;
   }
 }
 

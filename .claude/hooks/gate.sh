@@ -73,8 +73,15 @@ check_tokens() {
   local find_args=(-type f \
                    \( -name '*.ts' -o -name '*.tsx' -o -name '*.css' \) \
                    ! -name 'globals.css')
-  if [ "$(find "${present[@]}" "${find_args[@]}" | wc -l)" -eq 0 ]; then
-    echo "   no files to check"
+  local file_count
+  if ! file_count=$(find "${present[@]}" "${find_args[@]}" | wc -l); then
+    echo "   find failed over: ${present[*]}"
+    return 1
+  fi
+  if [ "$file_count" -eq 0 ]; then
+    # Paths exist but hold nothing scannable. Say so loudly rather than
+    # reporting a clean sweep that never happened.
+    echo "   no files to check under: ${present[*]}"
     return 0
   fi
 
@@ -121,7 +128,7 @@ check_tokens() {
 
   hits=$(find "${present[@]}" "${find_args[@]}" \
            -exec grep -oHnE -e "$keyword_rule" {} + 2>/dev/null \
-         | grep -vE -e "$keyword_allow")
+         | grep -vE -e "$keyword_allow\$")
   if [ -n "$hits" ]; then
     printf '%s\n' "$hits" | sed "s/^/   named colour: /"
     rc=1

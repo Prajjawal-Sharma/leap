@@ -1,26 +1,394 @@
 @import "tailwindcss";
+@import "tw-animate-css";
+@import "./shadcn-variants.css";
 
+/* Class-based theming: `.dark` on <html> (or on a panel in /dev/ui) flips the
+   palette. `:where()` keeps specificity at zero and matches the element
+   carrying the class as well as its descendants.
+
+   The `:not(...)` is what makes the side-by-side gallery honest. The app runs
+   with `.dark` on <html>, so a `.light` panel nested inside it is still a
+   `.dark *` descendant — without this, every `dark:` utility inside the light
+   panel would fire and the panel would quietly render dark-theme styling on
+   light tokens.
+
+   This handles one level of nesting, not arbitrary alternation: a `.dark`
+   panel inside a `.light` panel inside `html.dark` would get the dark
+   *tokens* but not the `dark:` *utilities*. The gallery renders its panels as
+   siblings, so that case does not arise; a future nested-theme surface would
+   need a different mechanism. */
+@custom-variant dark (&:where(.dark, .dark *):not(:where(.light, .light *)));
+
+/* ---------------------------------------------------------------------------
+   Colour — docs/DESIGN.md §5.1. Hex exactly as the table gives it (the spec
+   allows hex or a round-tripping OKLCH; hex removes the conversion risk).
+   Contrast ratios in the comments are measured against --card.
+--------------------------------------------------------------------------- */
+:root,
+.light {
+  --background: #f3f4f7;
+  --foreground: #14161b;
+  --card: #ffffff;
+  --card-foreground: #14161b;
+  --muted: #f6f7f9;
+  --muted-foreground: #5e6472; /* 5.93:1 */
+  --accent: #f0f1f4;
+  --accent-foreground: #14161b;
+  --primary: #4f46e5; /* white text 6.29:1 */
+  --primary-foreground: #ffffff;
+  --brand-text: #4f46e5; /* 6.29:1 */
+  --brand-soft: #eef0ff;
+  --border: rgb(16 18 24 / 0.08);
+  --input: rgb(16 18 24 / 0.14);
+  --ring: #6366f1;
+  --destructive: #b91c1c; /* 6.47:1 */
+  --destructive-foreground: #ffffff;
+  --success: #15803d; /* 5.02:1 */
+  --warning: #b45309; /* 5.02:1 */
+  --faint: #8a909c; /* 3.21:1 — disabled text and decorative icons only */
+
+  /* shadcn names with no DESIGN equivalent, mapped onto the palette above. */
+  --popover: #ffffff;
+  --popover-foreground: #14161b;
+  --secondary: #f6f7f9;
+  --secondary-foreground: #14161b;
+
+  /* Supporting tokens — DESIGN §5.1 "Supporting tokens". */
+  --fit-track: rgb(20 22 27 / 0.1); /* --foreground @ 10% */
+  --switch-off: rgb(16 18 24 / 0.18);
+  --seg-thumb: #ffffff;
+  --tab-on: rgb(79 70 229 / 0.1);
+  --scrim: rgb(10 12 16 / 0.34);
+
+  /* CompanyMark tints — every pair measured ≥ 6:1 (see PR body). */
+  --mk-slate-bg: #e8eaef;
+  --mk-slate-fg: #3f4654; /* 7.88:1 */
+  --mk-teal-bg: #dcf2ea;
+  --mk-teal-fg: #0f5f4b; /* 6.50:1 */
+  --mk-amber-bg: #fbebd2;
+  --mk-amber-fg: #7a4e08; /* 6.13:1 */
+  --mk-sky-bg: #dceafb;
+  --mk-sky-fg: #1c4e80; /* 7.02:1 */
+
+  /* Glass — DESIGN §5.2. Chrome only; never behind text people read. */
+  --glass-bg: rgb(255 255 255 / 0.82);
+  --glass-highlight: inset 0 1px 0 rgb(255 255 255 / 0.65);
+  --glass-shadow: 0 1px 2px rgb(0 0 0 / 0.04), 0 12px 32px -8px rgb(0 0 0 / 0.12);
+
+  color-scheme: light;
+}
+
+.dark {
+  --background: #0f1115;
+  --foreground: #eceef2;
+  --card: #16191f;
+  --card-foreground: #eceef2;
+  --muted: #1c2027;
+  --muted-foreground: #9aa0ae; /* 6.72:1 */
+  --accent: #232731;
+  --accent-foreground: #eceef2;
+  --primary: #4f46e5; /* white text 6.29:1 */
+  --primary-foreground: #ffffff;
+  --brand-text: #818cf8; /* 5.90:1 */
+  --brand-soft: rgb(129 140 248 / 0.14);
+  --border: rgb(255 255 255 / 0.08);
+  --input: rgb(255 255 255 / 0.14);
+  --ring: #6366f1;
+  --destructive: #f87171; /* 6.36:1 */
+  --destructive-foreground: #14161b; /* dark text: #f87171 is a light fill */
+  --success: #4ade80; /* 10.10:1 */
+  --warning: #fbbf24; /* 10.54:1 */
+  --faint: #6b7280; /* 3.64:1 — disabled text and decorative icons only */
+
+  --popover: #16191f;
+  --popover-foreground: #eceef2;
+  --secondary: #1c2027;
+  --secondary-foreground: #eceef2;
+
+  --fit-track: rgb(236 238 242 / 0.12); /* --foreground @ 12% */
+  --switch-off: rgb(255 255 255 / 0.2);
+  --seg-thumb: #2a2f3a;
+  --tab-on: rgb(129 140 248 / 0.16);
+  --scrim: rgb(0 0 0 / 0.55);
+
+  --mk-slate-bg: #2a2f39;
+  --mk-slate-fg: #c3c9d6; /* 8.09:1 */
+  --mk-teal-bg: #10342c;
+  --mk-teal-fg: #6ee7c0; /* 8.94:1 */
+  --mk-amber-bg: #3a2e0e;
+  --mk-amber-fg: #fbbf24; /* 7.98:1 */
+  --mk-sky-bg: #102c40;
+  --mk-sky-fg: #7dd3fc; /* 8.65:1 */
+
+  --glass-bg: rgb(24 27 34 / 0.78);
+  --glass-highlight: inset 0 1px 0 rgb(255 255 255 / 0.07);
+  --glass-shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 12px 32px -8px rgb(0 0 0 / 0.5);
+
+  color-scheme: dark;
+}
+
+/* Theme-independent scalars. */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --radius: 12px;
+
+  --glass-blur: 20px;
+  --glass-saturate: 180%;
+  --glass-border: 1px solid var(--border);
+
+  /* Motion — DESIGN §5.5. */
+  --dur-1: 120ms; /* hover, tooltips, fades */
+  --dur-2: 200ms; /* controls, menus, tabs */
+  --dur-3: 300ms; /* panels, sidebar collapse, sheets */
+  --dur-spring: 500ms; /* confirmations, FitMeter fill */
+}
+
+/* Blur is cheaper on small screens at 12px — DESIGN §5.2. */
+@media (width < 640px) {
+  :root {
+    --glass-blur: 12px;
+  }
+}
+
+/* Glass fallbacks. Each path drops to 0.96 alpha with no blur. */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  :root {
+    --glass-blur: 0px;
+  }
+  :root,
+  .light {
+    --glass-bg: rgb(255 255 255 / 0.96);
+  }
+  .dark {
+    --glass-bg: rgb(24 27 34 / 0.96);
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  :root {
+    --glass-blur: 0px;
+  }
+  :root,
+  .light {
+    --glass-bg: rgb(255 255 255 / 0.96);
+  }
+  .dark {
+    --glass-bg: rgb(24 27 34 / 0.96);
+  }
+}
+
+/* The in-app "Solid surfaces" setting (html.solid) — covers Safari, which
+   does not support prefers-reduced-transparency. Specificity is raised so it
+   wins over the plain .light/.dark definitions in both nestings. */
+:root.solid {
+  --glass-blur: 0px;
+  --glass-bg: rgb(255 255 255 / 0.96);
+}
+:root.solid.dark {
+  --glass-bg: rgb(24 27 34 / 0.96);
+}
+.solid .light {
+  --glass-bg: rgb(255 255 255 / 0.96);
+}
+.solid .dark {
+  --glass-bg: rgb(24 27 34 / 0.96);
+}
+
+/* ---------------------------------------------------------------------------
+   Tailwind theme. Colour and radius map through var() references only, so the
+   class-scoped palettes above keep working; fonts and the type scale are
+   literal because they never vary by theme.
+--------------------------------------------------------------------------- */
+@theme {
+  /* DESIGN §5.3 — system UI stack, nothing downloaded. */
+  --font-sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, "SF Pro Text",
+    "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  --text-display: 40px;
+  --text-display--line-height: 44px;
+  --text-display--font-weight: 650;
+  --text-title-1: 28px;
+  --text-title-1--line-height: 34px;
+  --text-title-1--font-weight: 650;
+  --text-title-2: 20px;
+  --text-title-2--line-height: 28px;
+  --text-title-2--font-weight: 600;
+  --text-title-3: 16px;
+  --text-title-3--line-height: 22px;
+  --text-title-3--font-weight: 600;
+  --text-body: 15px;
+  --text-body--line-height: 24px;
+  --text-body--font-weight: 400;
+  --text-body-sm: 14px;
+  --text-body-sm--line-height: 20px;
+  --text-body-sm--font-weight: 400;
+  --text-caption: 12px;
+  --text-caption--line-height: 16px;
+  --text-caption--font-weight: 500;
+
+  /* DESIGN §5.5 — nothing in the repo uses Tailwind's own ease-* utilities,
+     so taking these names is safe. */
+  --ease-out: cubic-bezier(0.2, 0, 0, 1);
+  --ease-spring: linear(
+    0, 0.072, 0.235, 0.428, 0.611, 0.765, 0.882, 0.963, 1.013, 1.04, 1.049,
+    1.048, 1.041, 1.032, 1.022, 1.014, 1.008, 1.003, 1, 0.998, 1
+  );
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  /* Leap extras. */
+  --color-brand-text: var(--brand-text);
+  --color-brand-soft: var(--brand-soft);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-faint: var(--faint);
+  --color-fit-track: var(--fit-track);
+  --color-switch-off: var(--switch-off);
+  --color-seg-thumb: var(--seg-thumb);
+  --color-tab-on: var(--tab-on);
+  --color-scrim: var(--scrim);
+  --color-mk-slate-bg: var(--mk-slate-bg);
+  --color-mk-slate-fg: var(--mk-slate-fg);
+  --color-mk-teal-bg: var(--mk-teal-bg);
+  --color-mk-teal-fg: var(--mk-teal-fg);
+  --color-mk-amber-bg: var(--mk-amber-bg);
+  --color-mk-amber-fg: var(--mk-amber-fg);
+  --color-mk-sky-bg: var(--mk-sky-bg);
+  --color-mk-sky-fg: var(--mk-sky-fg);
+
+  /* shadcn's Sidebar reads its own names; point them at the palette. */
+  --color-sidebar: var(--card);
+  --color-sidebar-foreground: var(--foreground);
+  --color-sidebar-primary: var(--primary);
+  --color-sidebar-primary-foreground: var(--primary-foreground);
+  --color-sidebar-accent: var(--accent);
+  --color-sidebar-accent-foreground: var(--accent-foreground);
+  --color-sidebar-border: var(--border);
+  --color-sidebar-ring: var(--ring);
+
+  /* DESIGN §5.4 — sm 8 (controls), md 10, lg 12 (rows, cards), xl 16
+     (floating chrome, sheets). */
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+/* ---------------------------------------------------------------------------
+   Material utilities. Glass is chrome only — DESIGN §5.2 and principle 1.
+--------------------------------------------------------------------------- */
+
+/* Floating chrome: sidebar, tab bar, menus, popovers, toasts. */
+@utility glass {
+  background-color: var(--glass-bg);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  border: var(--glass-border);
+  box-shadow: var(--glass-highlight), var(--glass-shadow);
+}
+
+/* Edge-attached bar: hairline on the inner edge, no shadow. Default is a top
+   bar (hairline below); glass-bar-top is the footer variant. */
+@utility glass-bar {
+  background-color: var(--glass-bg);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  border-bottom: 1px solid var(--border);
+}
+
+@utility glass-bar-top {
+  background-color: var(--glass-bg);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  border-top: 1px solid var(--border);
+}
+
+/* Press feedback — DESIGN §5.5. transform and opacity only. The nested
+   reduced-motion branch keeps the fill on a bare `.press` element; on a
+   [data-slot] component the global block above supersedes it and the fill
+   snaps too, which is the behaviour the spec asks for. */
+@utility press {
+  transition:
+    transform var(--dur-2) var(--ease-out),
+    background-color var(--dur-2) var(--ease-out);
+
+  &:active {
+    transform: scale(0.97);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    transition: background-color var(--dur-2) var(--ease-out);
+
+    &:active {
+      transform: none;
+    }
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+/* Reduced motion — DESIGN §5.5: transitions are opacity-only, nothing scales
+   or translates. Scoped to component subtrees rather than `*` so unmigrated
+   pages keep the exact behaviour they have in production; every shadcn and
+   Base UI root carries data-slot, and src/components/features and
+   src/components/landing use it nowhere (verified: 0 occurrences).
+
+   transform itself is deliberately NOT reset — dialogs centre themselves with
+   -translate-x-1/2, and clearing that would throw them off screen. Removing
+   the transition is what stops the movement. */
+@media (prefers-reduced-motion: reduce) {
+  :where([data-slot]),
+  :where([data-slot]) * {
+    animation: none !important;
+    transition-property: opacity !important;
+    /* Base UI waits on getAnimations() before unmounting a popup. The Drawer
+       keeps a 1 -> 0.9999 opacity sentinel on its closing style, so leaving
+       the duration alone would hold the unmount for the full 450ms after the
+       panel had already snapped away. */
+    transition-duration: 0.01ms !important;
+  }
+}
+
+@layer base {
+  /* shadcn components lean on a default border colour — the sheet's bare
+     `border-t`, for one. Scoped for the same reason as the block above: the
+     spec calls out this exact rule as a visual-regression risk for pages that
+     have not migrated yet. */
+  :where([data-slot]),
+  :where([data-slot]) * {
+    @apply border-border outline-ring/50;
+  }
+
+  body {
+    @apply bg-background text-foreground font-sans;
+  }
+
+  /* Reading comfort — DESIGN §5.3. */
+  h1,
+  h2,
+  h3 {
+    text-wrap: balance;
+  }
+
+  p {
+    text-wrap: pretty;
+  }
 }

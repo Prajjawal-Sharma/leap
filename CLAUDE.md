@@ -16,7 +16,7 @@ Working dir: `~/Prajjawal/Claude/leap`
 Production: https://leap-five-delta.vercel.app
 
 ## Tech Stack (LOCKED — do not suggest alternatives)
-- Framework: Next.js 16.2.4 App Router + React 19.2.4 + TypeScript strict mode
+- Framework: Next.js 16.4.2 App Router + React 19.2.4 + TypeScript strict mode
 - UI: Tailwind CSS v4. The theme is defined in CSS — `@import "tailwindcss"`
   plus an `@theme inline` block in `src/app/globals.css`. There is **no**
   `tailwind.config` file in this repo; do not create one. PostCSS loads

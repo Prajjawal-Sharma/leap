@@ -6,6 +6,8 @@ import {
   streamGemini,
   type GeminiContent,
 } from "@/lib/ai/gemini-client";
+import { nextUtcMidnight, utcDay } from "@/lib/chat/quota";
+import { createAdminSupabase } from "@/lib/supabase-admin";
 import { createServerSupabase } from "@/lib/supabase-server";
 import type { ChatRole } from "@/types/chat";
 
@@ -17,6 +19,8 @@ const HISTORY_LIMIT = 30;
 const MAX_MESSAGE_LEN = 4000;
 // Per-user daily cap on user messages. 30 covers heavy legitimate use while
 // bounding worst-case spend on the paid Tier-1 Gemini key; tune post-launch.
+// Counted in public.chat_usage (migration 0007), which users can read but not
+// write, so Clear chat no longer resets it.
 const CHAT_DAILY_LIMIT = 30;
 
 type StoredMessage = {
@@ -35,6 +39,27 @@ const toGeminiContents = (
   contents.push({ role: "user", parts: [{ text: next }] });
   return contents;
 };
+
+// Gives back the slot consume_chat_quota took when the request fails before
+// any model text was streamed. refund_chat_quota is executable by
+// service_role only — if users could call it they could loop it and never
+// hit the cap — hence the admin client. Best effort: a failed refund costs
+// the user one message and is logged, never surfaced.
+async function refundQuota(userId: string, day: string): Promise<void> {
+  try {
+    const admin = createAdminSupabase();
+    const { error } = await admin.rpc("refund_chat_quota", {
+      p_user_id: userId,
+      p_day: day,
+    });
+    if (error) {
+      console.error(`[api/chat] quota refund failed: ${error.message}`);
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[api/chat] quota refund failed: ${msg}`);
+  }
+}
 
 export async function POST(request: NextRequest) {
   const supabase = await createServerSupabase();
@@ -62,31 +87,40 @@ export async function POST(request: NextRequest) {
   }
   const message = raw.slice(0, MAX_MESSAGE_LEN);
 
-  // Daily cap — checked before the user row is inserted and before any
-  // Gemini call, so a capped message is never persisted or billed. Only
-  // role='user' rows count; assistant replies don't eat the quota. Day
-  // boundary is UTC to compare directly against created_at (timestamptz).
-  const dayStartUtc = new Date();
-  dayStartUtc.setUTCHours(0, 0, 0, 0);
+  // Daily cap — consumed before the user row is inserted and before any
+  // Gemini call, so a capped message is never persisted or billed. The RPC
+  // is one atomic check-and-increment on the caller's own chat_usage row, so
+  // parallel requests cannot both slip under the limit. The day is UTC; it
+  // is captured here so a refund lands on the day that was charged.
+  const now = new Date();
+  const quotaDay = utcDay(now);
+  const resetsAt = nextUtcMidnight(now).toISOString();
 
-  const { count: sentToday, error: countErr } = await supabase
-    .from("chat_messages")
-    .select("id", { count: "exact", head: true })
-    .eq("user_id", user.id)
-    .eq("role", "user")
-    .gte("created_at", dayStartUtc.toISOString());
+  const { data: used, error: quotaErr } = await supabase.rpc(
+    "consume_chat_quota",
+    { p_limit: CHAT_DAILY_LIMIT }
+  );
 
-  if (countErr) {
-    return NextResponse.json({ error: countErr.message }, { status: 500 });
+  if (quotaErr || typeof used !== "number") {
+    return NextResponse.json(
+      { error: quotaErr?.message ?? "quota check failed" },
+      { status: 500 }
+    );
   }
 
-  if ((sentToday ?? 0) >= CHAT_DAILY_LIMIT) {
+  if (used === -1) {
     return NextResponse.json(
-      { error: "daily_limit_reached", limit: CHAT_DAILY_LIMIT },
+      {
+        error: "daily_limit_reached",
+        limit: CHAT_DAILY_LIMIT,
+        resets_at: resetsAt,
+      },
       { status: 429 }
     );
   }
 
+  // From here until the first model chunk arrives, every failure returns the
+  // slot: nothing was spent on the paid key yet.
   const { data: historyRows, error: historyErr } = await supabase
     .from("chat_messages")
     .select("role, content")
@@ -95,6 +129,7 @@ export async function POST(request: NextRequest) {
     .limit(HISTORY_LIMIT);
 
   if (historyErr) {
+    await refundQuota(user.id, quotaDay);
     return NextResponse.json({ error: historyErr.message }, { status: 500 });
   }
 
@@ -106,6 +141,7 @@ export async function POST(request: NextRequest) {
     .insert({ user_id: user.id, role: "user", content: message });
 
   if (insertUserErr) {
+    await refundQuota(user.id, quotaDay);
     return NextResponse.json(
       { error: insertUserErr.message },
       { status: 500 }
@@ -116,17 +152,27 @@ export async function POST(request: NextRequest) {
   try {
     systemPrompt = await buildSystemPrompt(supabase, user.id);
   } catch (err) {
+    await refundQuota(user.id, quotaDay);
     const msg = err instanceof Error ? err.message : "context build failed";
     return NextResponse.json({ error: msg }, { status: 500 });
   }
 
-  let iterable: AsyncIterable<string>;
+  // Pull the first chunk before committing to a 200. streamGemini throws on
+  // a model error part, so a non-2xx or a thrown call surfaces here, before
+  // any text exists — refund and answer with the error status. Only this one
+  // chunk is held; the rest is piped through as it arrives. A failure after
+  // the first chunk is not refunded: tokens were spent.
+  let iterator: AsyncIterator<string>;
+  let first: IteratorResult<string>;
   try {
-    iterable = await streamGemini(toGeminiContents(history, message), {
+    const iterable = await streamGemini(toGeminiContents(history, message), {
       systemInstruction: systemPrompt,
       temperature: 0.7,
     });
+    iterator = iterable[Symbol.asyncIterator]();
+    first = await iterator.next();
   } catch (err) {
+    await refundQuota(user.id, quotaDay);
     if (err instanceof GeminiError) {
       return NextResponse.json(
         { error: err.message, retryable: err.retryable },
@@ -141,6 +187,9 @@ export async function POST(request: NextRequest) {
 
   const encoder = new TextEncoder();
   const userId = user.id;
+  const rest: AsyncIterable<string> = {
+    [Symbol.asyncIterator]: () => iterator,
+  };
 
   // Plain-text chunked stream — each enqueue is a delta. Client just
   // concatenates TextDecoder output. The pump persists the assembled
@@ -164,7 +213,11 @@ export async function POST(request: NextRequest) {
       };
 
       try {
-        for await (const chunk of iterable) {
+        if (!first.done) {
+          assembled += first.value;
+          controller.enqueue(encoder.encode(first.value));
+        }
+        for await (const chunk of rest) {
           assembled += chunk;
           controller.enqueue(encoder.encode(chunk));
         }
@@ -190,6 +243,10 @@ export async function POST(request: NextRequest) {
       "Content-Type": "text/plain; charset=utf-8",
       "Cache-Control": "no-store, no-transform",
       "X-Accel-Buffering": "no",
+      // Lets the chat UI show "N left today" without another query.
+      "X-Chat-Used": String(used),
+      "X-Chat-Limit": String(CHAT_DAILY_LIMIT),
+      "X-Chat-Resets-At": resetsAt,
     },
   });
 }

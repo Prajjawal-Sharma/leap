@@ -1,5 +1,12 @@
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
-import { streamText, type ModelMessage } from "ai";
+import {
+  APICallError,
+  RetryError,
+  streamText,
+  type ModelMessage,
+} from "ai";
+
+import { textDeltas } from "./text-deltas";
 
 // Three call paths into the Gemini API:
 //
@@ -556,8 +563,25 @@ export type StreamGeminiOptions = {
 // free rotation: a live conversation can't tolerate the rotation's "all keys
 // cooling, retry in 60s" stalls. We map the GeminiContent history onto AI SDK
 // ModelMessages and hand back the raw text-delta stream; the caller owns
-// persistence and client framing. Per the textStream contract, a mid-stream
-// failure throws into the consumer (the route pump), which surfaces it.
+// persistence and client framing. Deltas come from fullStream via textDeltas,
+// not result.textStream: textStream silently drops error parts, so a non-2xx
+// used to look like an empty reply. Now any failure throws into the consumer
+// — before the first chunk (the route refunds the quota slot) or mid-stream
+// (the route pump surfaces it).
+const toGeminiStreamError = (raw: unknown): GeminiError => {
+  // After the SDK's own retries a retryable failure arrives wrapped.
+  const cause = RetryError.isInstance(raw) ? raw.lastError : raw;
+  if (APICallError.isInstance(cause)) {
+    return new GeminiError(
+      cause.message,
+      cause.statusCode ?? 502,
+      cause.isRetryable
+    );
+  }
+  const message = cause instanceof Error ? cause.message : "chat stream failed";
+  return new GeminiError(message, 502, true);
+};
+
 export async function streamGemini(
   contents: GeminiContent[],
   opts: StreamGeminiOptions = {}
@@ -577,5 +601,5 @@ export async function streamGemini(
     ...(opts.systemInstruction ? { system: opts.systemInstruction } : {}),
   });
 
-  return result.textStream;
+  return textDeltas(result.fullStream, toGeminiStreamError);
 }

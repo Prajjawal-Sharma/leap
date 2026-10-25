@@ -64,8 +64,8 @@ export function decideRoute(
   if (hasUser && isAuthRoute) {
     // ?next= is attacker-supplied: safeNext screens it (one rule for every
     // read site — protocol-relative, backslash, control chars, schemes), and
-    // landsInternal closes the dot-segment escape that only appears once the
-    // proxy assigns the value to url.pathname.
+    // landsInternal closes the escapes that only appear once the proxy
+    // assigns the value to url.pathname and Next re-parses the Location.
     const target = safeNext(nextParam);
     return {
       action: "to-app",

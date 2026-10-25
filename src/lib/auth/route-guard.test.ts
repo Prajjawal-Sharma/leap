@@ -109,6 +109,13 @@ describe("decideRoute — auth routes", () => {
       "/%2E%2E//evil.com",
       "/x/../..//evil.com",
       "/..//evil.com/path?q",
+      // Next strips a /_next/data/<buildId>/…json wrapper when it re-parses
+      // the Location; an empty buildId leaves "//evil.com".
+      "/_next/data///evil.com.json",
+      "/_next/data///evil.com/phish.json",
+      "/x/../_next/data///evil.com.json",
+      "/%2e/_next/data////datadata...json",
+      "/_NEXT/data///evil.com.json",
     ]) {
       assert.deepEqual(
         decideRoute("/login", next, SIGNED_IN),
@@ -123,7 +130,8 @@ describe("decideRoute — auth routes", () => {
   it("never returns a pathname that leaves the origin once applied", () => {
     const inputs = [
       "/..//evil.com", "/./..//evil.com", "/a/b/../../..//evil.com",
-      "/%2e//evil.com", "/.%2e//evil.com", "/applications", "/jobs/../chat",
+      "/%2e//evil.com", "/.%2e//evil.com", "/_next/data///evil.com.json",
+      "/applications", "/jobs/../chat",
     ];
     for (const next of inputs) {
       const decision = decideRoute("/login", next, SIGNED_IN);
@@ -133,6 +141,7 @@ describe("decideRoute — auth routes", () => {
       url.pathname = decision.pathname;
       assert.equal(url.origin, "https://leap.example");
       assert.ok(!url.pathname.startsWith("//"), `${next} → ${url.pathname}`);
+      assert.ok(!url.pathname.startsWith("/_next/"), `${next} → ${url.pathname}`);
     }
   });
 

@@ -26,17 +26,27 @@ export type RouteDecision =
 
 const FALLBACK = "/jobs";
 
-// The proxy applies the target with `url.pathname = target`. The URL path
-// setter resolves dot segments, so a target safeNext accepts as internal —
-// "/..//evil.com", "/%2e%2e//evil.com", "/x/../..//evil.com" — comes out as
-// "//evil.com", and Next shortens a same-host Location to that relative,
-// protocol-relative form, which browsers send off-site. Run the same setter
-// here and refuse anything that lands on "//". Every other target is returned
-// exactly as before, so legitimate redirects are unchanged.
+// The proxy applies the target with `url.pathname = target`, and Next then
+// re-parses the Location it returns before shortening a same-host URL to a
+// relative one (next/dist/server/web/adapter.js). Two steps can turn a target
+// safeNext accepts as internal into a protocol-relative "//host", which
+// browsers send off-site:
+//   - the URL path setter resolves dot segments: "/..//evil.com",
+//     "/%2e%2e//evil.com" and "/x/../..//evil.com" all become "//evil.com";
+//   - the re-parse strips a "/_next/data/<buildId>/…json" wrapper, and an
+//     empty buildId leaves "//evil.com" ("/_next/data///evil.com.json").
+// Run the same setter here and refuse anything that lands on "//" or under
+// /_next — no page redirect ever legitimately targets Next's internals.
+// Every other target is returned exactly as before.
 function landsInternal(target: string): boolean {
   const probe = new URL("http://route-guard.invalid/");
   probe.pathname = target;
-  return !probe.pathname.startsWith("//");
+  const resolved = probe.pathname.toLowerCase();
+  return (
+    !resolved.startsWith("//") &&
+    resolved !== "/_next" &&
+    !resolved.startsWith("/_next/")
+  );
 }
 
 export function decideRoute(

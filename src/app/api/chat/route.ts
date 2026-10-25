@@ -90,8 +90,11 @@ export async function POST(request: NextRequest) {
   // Daily cap — consumed before the user row is inserted and before any
   // Gemini call, so a capped message is never persisted or billed. The RPC
   // is one atomic check-and-increment on the caller's own chat_usage row, so
-  // parallel requests cannot both slip under the limit. The day is UTC; it
-  // is captured here so a refund lands on the day that was charged.
+  // parallel requests cannot both slip under the limit. The day is UTC and
+  // is captured here for the refund. consume_chat_quota reads the DB clock,
+  // so within clock skew of midnight the two can disagree; the refund then
+  // misses and the user loses one slot. It can never over-refund the new day
+  // by more than the one slot this request took, so spend stays bounded.
   const now = new Date();
   const quotaDay = utcDay(now);
   const resetsAt = nextUtcMidnight(now).toISOString();

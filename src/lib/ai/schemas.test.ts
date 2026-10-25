@@ -5,9 +5,12 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
+import type { z } from "zod";
+
 import {
   ParsedResumeSchema,
   ResumeParseAndScoreSchema,
+  ResumeScoreAnalysisSchema,
   TailoredResumeSchema,
 } from "./schemas";
 
@@ -71,6 +74,20 @@ const atsAnalysis = {
 
 const repeat = (n: number) => "x".repeat(n);
 
+// Asserts the parse failed for exactly the reason the test names, so a
+// sample that fails for some other reason cannot keep the test green.
+function assertSingleIssue(
+  r: z.ZodSafeParseResult<unknown>,
+  path: (string | number)[],
+  code: string
+) {
+  assert.equal(r.success, false);
+  if (r.success) return;
+  assert.equal(r.error.issues.length, 1, JSON.stringify(r.error.issues));
+  assert.deepEqual(r.error.issues[0].path, path);
+  assert.equal(r.error.issues[0].code, code);
+}
+
 describe("ParsedResumeSchema", () => {
   it("parses a full, realistic resume unchanged", () => {
     const r = ParsedResumeSchema.safeParse(fullResume);
@@ -100,12 +117,22 @@ describe("ParsedResumeSchema", () => {
     assert.equal(r.success && "instructions" in r.data, false);
   });
 
+  // Pitfall 3: lowering a cap must break a test, not only raising one.
+  it("accepts values exactly at the caps", () => {
+    const r = ParsedResumeSchema.safeParse({
+      ...fullResume,
+      skills: ["Go", repeat(100)],
+      experience: Array.from({ length: 30 }, () => fullResume.experience[0]),
+    });
+    assert.equal(r.success, true);
+  });
+
   it("rejects a skill over the 100-char cap", () => {
     const r = ParsedResumeSchema.safeParse({
       ...fullResume,
       skills: ["Go", repeat(101)],
     });
-    assert.equal(r.success, false);
+    assertSingleIssue(r, ["skills", 1], "too_big");
   });
 
   it("rejects more than 30 experience entries", () => {
@@ -113,19 +140,20 @@ describe("ParsedResumeSchema", () => {
       ...fullResume,
       experience: Array.from({ length: 31 }, () => fullResume.experience[0]),
     });
-    assert.equal(r.success, false);
+    assertSingleIssue(r, ["experience"], "too_big");
   });
 
-  // The advisory: validating an oversized array under a .max() could exhaust
-  // memory. A hostile reply with a huge skills array must fail, and fail fast.
-  it("rejects a hugely oversized collection quickly", () => {
-    const started = Date.now();
+  // GHSA-mrhx-c7xc-m3w5: before 4.6.6, an oversized array under .max() was
+  // still validated item by item, collecting one issue per bad item — 200k
+  // over-long skills built a ~43 MB error.message (which every route logs)
+  // and ~400 MB of heap. Patched zod rejects on the size check alone, with
+  // one issue. This test fails on zod 4.3.6 and passes on the patched range.
+  it("rejects an oversized collection on the size check alone", () => {
     const r = ParsedResumeSchema.safeParse({
       ...fullResume,
-      skills: Array.from({ length: 200_000 }, () => "Go"),
+      skills: Array.from({ length: 200_000 }, () => repeat(101)),
     });
-    assert.equal(r.success, false);
-    assert.ok(Date.now() - started < 2_000, "validation took over 2s");
+    assertSingleIssue(r, ["skills"], "too_big");
   });
 });
 
@@ -143,23 +171,48 @@ describe("ResumeParseAndScoreSchema", () => {
   });
 
   // Pitfall 3: a fresher's CV with no summary, experience or skills is real
-  // data and must not take the 502 path.
-  it("accepts a sparse-but-real fresher CV", () => {
+  // data and must not take the 502 path. Shaped the way the prompt asks for
+  // it: every key present, "" and [] for what the resume does not have.
+  it("accepts a sparse-but-real fresher CV in the prompt's shape", () => {
     const r = ResumeParseAndScoreSchema.safeParse({
       resume: {
         full_name: "Meera Iyer",
         email: "meera@example.com",
+        phone: "",
+        location: "",
+        summary: "",
+        experience: [],
         education: [
           { institution: "Anna University", degree: "B.Sc", year: "2026" },
         ],
+        skills: [],
         certifications: ["Google Data Analytics Certificate"],
+        languages: [],
       },
-      ats_analysis: { score: 41 },
+      ats_analysis: {
+        score: 41,
+        strengths: ["Relevant certification for analyst roles"],
+        improvements: [
+          "Add a skills section listing SQL, spreadsheets and any BI tools",
+          "Add a two-line summary naming the roles you are targeting",
+        ],
+        keywords_missing: ["SQL", "Excel", "Tableau"],
+        verdict:
+          "Thin for ATS filters today; a skills section and a project or internship would lift it substantially.",
+      },
     });
     assert.equal(r.success, true);
-    if (!r.success) return;
-    assert.deepEqual(r.data.ats_analysis.strengths, []);
-    assert.equal(r.data.ats_analysis.verdict, "");
+  });
+
+  // Older stored parsed_content can predate a field; the schema re-checks it
+  // at tailor time and in the chat context, so missing keys must default.
+  it("fills defaults when keys are missing entirely", () => {
+    const r = ResumeParseAndScoreSchema.safeParse({
+      resume: { full_name: "Rohit Nair", education: fullResume.education },
+      ats_analysis: atsAnalysis,
+    });
+    assert.equal(r.success, true);
+    assert.deepEqual(r.success && r.data.resume.skills, []);
   });
 
   it("rejects an extraction with no resume content at all", () => {
@@ -170,12 +223,20 @@ describe("ResumeParseAndScoreSchema", () => {
     assert.equal(r.success, false);
   });
 
+  it("accepts a keywords_missing entry exactly at the 200-char cap", () => {
+    const r = ResumeParseAndScoreSchema.safeParse({
+      resume: fullResume,
+      ats_analysis: { ...atsAnalysis, keywords_missing: [repeat(200)] },
+    });
+    assert.equal(r.success, true);
+  });
+
   it("rejects a keywords_missing entry over the 200-char cap", () => {
     const r = ResumeParseAndScoreSchema.safeParse({
       resume: fullResume,
       ats_analysis: { ...atsAnalysis, keywords_missing: [repeat(201)] },
     });
-    assert.equal(r.success, false);
+    assertSingleIssue(r, ["ats_analysis", "keywords_missing", 0], "too_big");
   });
 
   it("rejects a non-finite score", () => {
@@ -183,7 +244,23 @@ describe("ResumeParseAndScoreSchema", () => {
       resume: fullResume,
       ats_analysis: { ...atsAnalysis, score: Number.POSITIVE_INFINITY },
     });
-    assert.equal(r.success, false);
+    assertSingleIssue(r, ["ats_analysis", "score"], "invalid_type");
+  });
+});
+
+// The standalone /api/resume/score site validates against this directly.
+describe("ResumeScoreAnalysisSchema", () => {
+  it("parses a realistic analysis", () => {
+    const r = ResumeScoreAnalysisSchema.safeParse(atsAnalysis);
+    assert.equal(r.success, true);
+  });
+
+  it("rejects more than 20 strengths", () => {
+    const r = ResumeScoreAnalysisSchema.safeParse({
+      ...atsAnalysis,
+      strengths: Array.from({ length: 21 }, () => "Clear impact"),
+    });
+    assertSingleIssue(r, ["strengths"], "too_big");
   });
 });
 
@@ -193,20 +270,45 @@ describe("TailoredResumeSchema", () => {
     assert.equal(r.success, true);
   });
 
-  it("accepts a sparse rewrite that carries only skills", () => {
+  // A rewrite of a sparse original (no work history yet): every key present
+  // as the prompt requires, contact details copied through, experience [].
+  it("accepts a rewrite of a sparse original", () => {
     const r = TailoredResumeSchema.safeParse({
-      full_name: "Asha Verma",
-      skills: ["Go", "Kafka"],
+      full_name: "Meera Iyer",
+      email: "meera@example.com",
+      phone: "",
+      location: "Chennai",
+      summary:
+        "Analytics graduate targeting junior data analyst roles, certified in Google Data Analytics.",
+      experience: [],
+      education: [
+        { institution: "Anna University", degree: "B.Sc", year: "2026" },
+      ],
+      skills: ["SQL", "Excel"],
+      certifications: ["Google Data Analytics Certificate"],
+      languages: ["English", "Tamil"],
     });
     assert.equal(r.success, true);
   });
 
-  it("rejects a degenerate reply with no summary, experience or skills", () => {
+  // Degenerate replies that are JSON objects but not a resume: a wrapper the
+  // prompt never asked for and a refusal. Both strip to {} and must 502.
+  it("rejects a wrapper object and a refusal object", () => {
+    for (const reply of [
+      { resume: fullResume },
+      { error: "I can't help with that request." },
+    ]) {
+      const r = TailoredResumeSchema.safeParse(reply);
+      assert.equal(r.success, false, JSON.stringify(reply).slice(0, 40));
+    }
+  });
+
+  it("accepts a summary exactly at the 2000-char cap", () => {
     const r = TailoredResumeSchema.safeParse({
-      full_name: "Asha Verma",
-      education: fullResume.education,
+      ...fullResume,
+      summary: repeat(2000),
     });
-    assert.equal(r.success, false);
+    assert.equal(r.success, true);
   });
 
   it("rejects a summary over the 2000-char cap", () => {
@@ -214,6 +316,6 @@ describe("TailoredResumeSchema", () => {
       ...fullResume,
       summary: repeat(2001),
     });
-    assert.equal(r.success, false);
+    assertSingleIssue(r, ["summary"], "too_big");
   });
 });

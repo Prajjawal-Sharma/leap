@@ -41,9 +41,7 @@ Production: https://leap-five-delta.vercel.app
   proposing a third cron.
 - Not installed, despite earlier notes claiming otherwise: Resend, Sentry,
   Vercel Analytics. Do not import or reference them as if they exist.
-- `src/middleware.ts` still uses the deprecated Next.js `middleware.ts`
-  convention; the rename to `proxy.ts` is tracked as its own change
-  (`chore/middleware-to-proxy`), not something to fold into an unrelated PR.
+- Request gating is `src/proxy.ts` (Next 16 `proxy` convention, Node.js runtime); its route decision is the pure `src/lib/auth/route-guard.ts`.
 
 ## Design system
 docs/DESIGN.md is the source of truth for tokens, components, motion, layout

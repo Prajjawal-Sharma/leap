@@ -22,6 +22,18 @@ const MAX_MESSAGE_LEN = 4000;
 // Counted in public.chat_usage (migration 0007), which users can read but not
 // write, so Clear chat no longer resets it.
 const CHAT_DAILY_LIMIT = 30;
+// The first model chunk must arrive within this, or the call is aborted and
+// refunded — comfortably inside maxDuration, which would otherwise kill the
+// function with a 504 and no refund.
+const FIRST_CHUNK_TIMEOUT_MS = 45_000;
+
+// What the client sees when the model call fails. Upstream messages carry
+// quota names, project numbers and, with a malformed key, the key itself, so
+// they go to the server log only.
+const CHAT_UNAVAILABLE =
+  "Chat is unavailable right now. Please try again in a moment.";
+const CHAT_NO_REPLY = "No reply was generated. Please try again.";
+const STREAM_INTERRUPTED = "\n\n[stream error: the reply was interrupted]";
 
 type StoredMessage = {
   role: ChatRole;
@@ -32,19 +44,25 @@ const toGeminiContents = (
   history: StoredMessage[],
   next: string
 ): GeminiContent[] => {
-  const contents: GeminiContent[] = history.map((m) => ({
-    role: m.role === "assistant" ? "model" : "user",
-    parts: [{ text: m.content }],
-  }));
+  // Rows with no text become `parts: []`, which Gemini rejects with a 400 for
+  // the whole request. Users can insert their own chat_messages rows, so an
+  // empty row is in their hands; drop it rather than fail every later call.
+  const contents: GeminiContent[] = history
+    .filter((m) => typeof m.content === "string" && m.content.trim() !== "")
+    .map((m) => ({
+      role: m.role === "assistant" ? "model" : "user",
+      parts: [{ text: m.content }],
+    }));
   contents.push({ role: "user", parts: [{ text: next }] });
   return contents;
 };
 
 // Gives back the slot consume_chat_quota took when the request fails before
-// any model text was streamed. refund_chat_quota is executable by
-// service_role only — if users could call it they could loop it and never
-// hit the cap — hence the admin client. Best effort: a failed refund costs
-// the user one message and is logged, never surfaced.
+// any model text was streamed, for reasons that are not the request's own
+// fault. refund_chat_quota is executable by service_role only — if users
+// could call it they could loop it and never hit the cap — hence the admin
+// client — and it refunds at most 5 times per user per day. Best effort: a
+// failed refund costs the user one message and is logged, never surfaced.
 async function refundQuota(userId: string, day: string): Promise<void> {
   try {
     const admin = createAdminSupabase();
@@ -105,10 +123,10 @@ export async function POST(request: NextRequest) {
   );
 
   if (quotaErr || typeof used !== "number") {
-    return NextResponse.json(
-      { error: quotaErr?.message ?? "quota check failed" },
-      { status: 500 }
+    console.error(
+      `[api/chat] consume_chat_quota failed: ${quotaErr?.message ?? "non-numeric result"}`
     );
+    return NextResponse.json({ error: CHAT_UNAVAILABLE }, { status: 500 });
   }
 
   if (used === -1) {
@@ -162,31 +180,58 @@ export async function POST(request: NextRequest) {
 
   // Pull the first chunk before committing to a 200. streamGemini throws on
   // a model error part, so a non-2xx or a thrown call surfaces here, before
-  // any text exists — refund and answer with the error status. Only this one
-  // chunk is held; the rest is piped through as it arrives. A failure after
-  // the first chunk is not refunded: tokens were spent.
+  // any text exists. Only this one chunk is held; the rest is piped through
+  // as it arrives. A failure after the first chunk is not refunded: tokens
+  // were spent.
+  //
+  // Only retryable failures are refunded (5xx, 429, network, the first-chunk
+  // timeout). A 4xx means the request itself was bad, and the request is
+  // built from history the user can write to; refunding that would let a
+  // user replay a failing request without ever using up the cap.
+  const firstChunkDeadline = new AbortController();
+  const deadlineTimer = setTimeout(
+    () => firstChunkDeadline.abort(),
+    FIRST_CHUNK_TIMEOUT_MS
+  );
   let iterator: AsyncIterator<string>;
   let first: IteratorResult<string>;
   try {
     const iterable = await streamGemini(toGeminiContents(history, message), {
       systemInstruction: systemPrompt,
       temperature: 0.7,
+      abortSignal: firstChunkDeadline.signal,
     });
     iterator = iterable[Symbol.asyncIterator]();
     first = await iterator.next();
   } catch (err) {
-    await refundQuota(user.id, quotaDay);
-    if (err instanceof GeminiError) {
-      return NextResponse.json(
-        { error: err.message, retryable: err.retryable },
-        { status: err.status === 429 ? 429 : 502 }
-      );
+    const geminiErr = err instanceof GeminiError ? err : null;
+    console.error(
+      `[api/chat] model call failed before any text: status=${geminiErr?.status ?? "n/a"} retryable=${geminiErr?.retryable ?? "n/a"} ${geminiErr?.message ?? (err instanceof Error ? err.name : "unknown error")}`
+    );
+    if (geminiErr?.retryable) {
+      await refundQuota(user.id, quotaDay);
     }
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : "stream failed" },
+      { error: CHAT_UNAVAILABLE, retryable: geminiErr?.retryable ?? true },
+      { status: geminiErr?.status === 429 ? 429 : 502 }
+    );
+  } finally {
+    clearTimeout(deadlineTimer);
+  }
+
+  // The model finished without a single character: a blocked prompt, a
+  // safety stop, or an error Google reported inside a 200 stream. Answer
+  // with an error rather than an empty 200 the client would render as a
+  // reply that never arrives. Not refunded: the call may have been billed,
+  // and a blocked prompt is reproducible by the user at will.
+  if (first.done) {
+    console.error("[api/chat] model returned no text");
+    return NextResponse.json(
+      { error: CHAT_NO_REPLY, retryable: true },
       { status: 502 }
     );
   }
+  const firstText = first.value;
 
   const encoder = new TextEncoder();
   const userId = user.id;
@@ -216,17 +261,16 @@ export async function POST(request: NextRequest) {
       };
 
       try {
-        if (!first.done) {
-          assembled += first.value;
-          controller.enqueue(encoder.encode(first.value));
-        }
+        assembled += firstText;
+        controller.enqueue(encoder.encode(firstText));
         for await (const chunk of rest) {
           assembled += chunk;
           controller.enqueue(encoder.encode(chunk));
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message : "stream error";
-        controller.enqueue(encoder.encode(`\n\n[stream error: ${msg}]`));
+        console.error(`[api/chat] model stream failed mid-reply: ${msg}`);
+        controller.enqueue(encoder.encode(STREAM_INTERRUPTED));
       } finally {
         try {
           await persist();

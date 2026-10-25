@@ -557,6 +557,8 @@ export type StreamGeminiOptions = {
   systemInstruction?: string;
   temperature?: number;
   model?: string;
+  /** Aborting before the first chunk surfaces as a retryable GeminiError. */
+  abortSignal?: AbortSignal;
 };
 
 // Chat runs on the paid Tier 1 key through the Vercel AI SDK rather than the
@@ -568,18 +570,28 @@ export type StreamGeminiOptions = {
 // used to look like an empty reply. Now any failure throws into the consumer
 // — before the first chunk (the route refunds the quota slot) or mid-stream
 // (the route pump surfaces it).
+//
+// Messages are for server logs only (the chat route never forwards them),
+// and are scrubbed of key material anyway: a malformed key value is echoed
+// verbatim by fetch's header validation ("... is an invalid header value").
+const redactKeys = (message: string): string => {
+  let out = message;
+  for (const { key } of allEntries) out = out.split(key).join("[redacted]");
+  return out.replace(/AIza[0-9A-Za-z_-]{8,}/g, "[redacted]");
+};
+
 const toGeminiStreamError = (raw: unknown): GeminiError => {
   // After the SDK's own retries a retryable failure arrives wrapped.
   const cause = RetryError.isInstance(raw) ? raw.lastError : raw;
   if (APICallError.isInstance(cause)) {
     return new GeminiError(
-      cause.message,
+      redactKeys(cause.message),
       cause.statusCode ?? 502,
       cause.isRetryable
     );
   }
   const message = cause instanceof Error ? cause.message : "chat stream failed";
-  return new GeminiError(message, 502, true);
+  return new GeminiError(redactKeys(message), 502, true);
 };
 
 export async function streamGemini(
@@ -599,6 +611,7 @@ export async function streamGemini(
     messages,
     temperature: opts.temperature ?? 0.7,
     ...(opts.systemInstruction ? { system: opts.systemInstruction } : {}),
+    ...(opts.abortSignal ? { abortSignal: opts.abortSignal } : {}),
   });
 
   return textDeltas(result.fullStream, toGeminiStreamError);

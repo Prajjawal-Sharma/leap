@@ -19,7 +19,9 @@
 --   * refund_chat_quota(p_user_id, p_day) — callable by `service_role` only
 --     (the chat route's admin client, after a model call failed before
 --     streaming any text). If `authenticated` could call it, any user could
---     loop it from the browser and never hit the cap.
+--     loop it from the browser and never hit the cap. Refunds are also capped
+--     at 5 per user per day, so even a failure a user can provoke on purpose
+--     buys at most 5 extra model calls a day.
 --
 -- Additive and idempotent: safe to run more than once, and safe to apply
 -- while the previous code (which never touches this table) is still live.
@@ -29,9 +31,15 @@ create table if not exists public.chat_usage (
   user_id uuid not null references auth.users(id) on delete cascade,
   day date not null,
   count int not null default 0 check (count >= 0),
+  refunds int not null default 0 check (refunds >= 0),
   updated_at timestamptz not null default now(),
   primary key (user_id, day)
 );
+
+-- No-op on a fresh apply; keeps a re-run idempotent against a draft of this
+-- file that predates the column.
+alter table public.chat_usage
+  add column if not exists refunds int not null default 0 check (refunds >= 0);
 
 alter table public.chat_usage enable row level security;
 
@@ -44,11 +52,9 @@ create policy "chat_usage_select_own"
 
 -- Belt and braces on top of RLS. Supabase's default privileges grant every
 -- verb on new public tables to anon and authenticated; RLS already blocks
--- insert/update/delete (no policy), but TRUNCATE is not subject to RLS at
--- all, so the write privileges go too.
-revoke all on table public.chat_usage from anon;
-revoke insert, update, delete, truncate, references, trigger
-  on table public.chat_usage from authenticated;
+-- insert/update/delete (no policy), but TRUNCATE (and MAINTAIN on PG17) is
+-- not subject to RLS at all. Revoke everything, then grant back SELECT.
+revoke all on table public.chat_usage from anon, authenticated;
 grant select on table public.chat_usage to authenticated;
 grant select, insert, update on table public.chat_usage to service_role;
 
@@ -96,9 +102,11 @@ begin
 end;
 $$;
 
--- Refund one slot for a user on a given UTC day, never below zero. The day
--- is passed in (the day the route charged against) so a refund that lands
--- just after midnight cannot top up the new day.
+-- Refund one slot for a user on a given UTC day, never below zero and at
+-- most 5 times per user per day. The cap exists because "the call failed
+-- before any text" is partly in the user's hands (they control their chat
+-- history); without it a provoked failure would be an unmetered call loop.
+-- The day is passed in: the day the route charged against.
 --
 -- security invoker on purpose: service_role already bypasses RLS and holds
 -- the table grants above, so definer rights would add nothing. If this
@@ -118,10 +126,12 @@ begin
 
   update public.chat_usage
     set count = count - 1,
+        refunds = refunds + 1,
         updated_at = now()
     where user_id = p_user_id
       and day = p_day
-      and count > 0;
+      and count > 0
+      and refunds < 5;
 end;
 $$;
 

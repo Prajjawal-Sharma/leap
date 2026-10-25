@@ -86,6 +86,39 @@ describe("textDeltas", () => {
     assert.ok(error instanceof Error);
   });
 
+  it("maps a rejection from the source itself through toError", async () => {
+    async function* broken(): AsyncGenerator<StreamPartLike> {
+      yield { type: "text-delta", text: "a" };
+      throw new TypeError("terminated");
+    }
+    const { chunks, error } = await collect(
+      textDeltas(broken(), (raw) =>
+        Object.assign(new Error("mapped"), { raw })
+      )
+    );
+    assert.deepEqual(chunks, ["a"]);
+    assert.ok(error instanceof Error);
+    assert.equal(error.message, "mapped");
+    assert.ok((error as Error & { raw: unknown }).raw instanceof TypeError);
+  });
+
+  it("releases the source when the consumer stops early", async () => {
+    let released = false;
+    async function* source(): AsyncGenerator<StreamPartLike> {
+      try {
+        yield { type: "text-delta", text: "a" };
+        yield { type: "text-delta", text: "b" };
+      } finally {
+        released = true;
+      }
+    }
+    for await (const chunk of textDeltas(source())) {
+      assert.equal(chunk, "a");
+      break;
+    }
+    assert.equal(released, true);
+  });
+
   it("throws on an abort part", async () => {
     const { chunks, error } = await collect(
       textDeltas(fake([{ type: "text-delta", text: "a" }, { type: "abort" }]))

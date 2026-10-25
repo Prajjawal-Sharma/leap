@@ -137,11 +137,11 @@ the daily pool on every cold start, so leave it unset there.
   (saved|applied|viewed|interviewing|offered|rejected|withdrawn), notes,
   tailored_resume_id, applied_at, updated_at
 - `chat_messages`: per-user chat history (see `0005_chat_messages.sql`)
-- `chat_usage`: user_id, day (UTC date), count, updated_at; PK (user_id, day).
-  Daily chat-cap counter. Users can select their own row only — no write
-  policy or grant; moved only by `consume_chat_quota(p_limit)` (authenticated,
-  atomic, own row) and `refund_chat_quota(p_user_id, p_day)` (service_role
-  only). See `0007_chat_usage.sql`.
+- `chat_usage`: user_id, day (UTC date), count, refunds, updated_at; PK
+  (user_id, day). Daily chat-cap counter. Users can select their own row
+  only — no write policy or grant; moved only by `consume_chat_quota(p_limit)`
+  (authenticated, atomic, own row) and `refund_chat_quota(p_user_id, p_day)`
+  (service_role only, max 5 refunds/user/day). See `0007_chat_usage.sql`.
 - RLS enabled on all tables
 
 Migrations live in `supabase/migrations/` and are numbered sequentially

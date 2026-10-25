@@ -23,20 +23,48 @@ const defaultToError = (raw: unknown): Error =>
 /**
  * Yields each non-empty text delta as soon as it arrives — no buffering — and
  * throws on the first `error` or `abort` part. Empty deltas are skipped so a
- * consumer that waits for the first chunk always waits for real text.
+ * consumer that waits for the first chunk always waits for real text. A
+ * rejection from the source itself (a reset connection surfaces as a bare
+ * TypeError) goes through `toError` too, so callers see one error type.
  */
 export async function* textDeltas(
   parts: AsyncIterable<StreamPartLike>,
   toError: (raw: unknown) => Error = defaultToError
 ): AsyncGenerator<string, void, undefined> {
-  for await (const part of parts) {
-    if (part.type === "text-delta") {
-      const { text } = part as { text: unknown };
-      if (typeof text === "string" && text.length > 0) yield text;
-    } else if (part.type === "error") {
-      throw toError((part as { error: unknown }).error);
-    } else if (part.type === "abort") {
-      throw toError(new Error("model stream aborted"));
+  const source = parts[Symbol.asyncIterator]();
+  let exhausted = false;
+  try {
+    for (;;) {
+      let step: IteratorResult<StreamPartLike>;
+      try {
+        step = await source.next();
+      } catch (raw) {
+        exhausted = true;
+        throw toError(raw);
+      }
+      if (step.done) {
+        exhausted = true;
+        return;
+      }
+      const part = step.value;
+      if (part.type === "text-delta") {
+        const { text } = part as { text: unknown };
+        if (typeof text === "string" && text.length > 0) yield text;
+      } else if (part.type === "error") {
+        throw toError((part as { error: unknown }).error);
+      } else if (part.type === "abort") {
+        throw toError(new Error("model stream aborted"));
+      }
+    }
+  } finally {
+    // Stopped early (consumer broke out, or an error part): release the
+    // source the way for-await would have.
+    if (!exhausted) {
+      try {
+        await source.return?.();
+      } catch {
+        // The error already on its way out is the one that matters.
+      }
     }
   }
 }

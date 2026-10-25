@@ -6,6 +6,7 @@ import {
   streamGemini,
   type GeminiContent,
 } from "@/lib/ai/gemini-client";
+import { budgetHistory } from "@/lib/chat/history";
 import { nextUtcMidnight, utcDay } from "@/lib/chat/quota";
 import { createAdminSupabase } from "@/lib/supabase-admin";
 import { createServerSupabase } from "@/lib/supabase-server";
@@ -27,9 +28,9 @@ const CHAT_DAILY_LIMIT = 30;
 // function with a 504 and no refund.
 const FIRST_CHUNK_TIMEOUT_MS = 45_000;
 
-// What the client sees when the model call fails. Upstream messages carry
-// quota names, project numbers and, with a malformed key, the key itself, so
-// they go to the server log only.
+// What the client sees when the call fails. Upstream and database messages
+// carry quota names, project numbers, SQL detail and, with a malformed key,
+// the key itself, so they go to the server log only.
 const CHAT_UNAVAILABLE =
   "Chat is unavailable right now. Please try again in a moment.";
 const CHAT_NO_REPLY = "No reply was generated. Please try again.";
@@ -44,15 +45,14 @@ const toGeminiContents = (
   history: StoredMessage[],
   next: string
 ): GeminiContent[] => {
-  // Rows with no text become `parts: []`, which Gemini rejects with a 400 for
-  // the whole request. Users can insert their own chat_messages rows, so an
-  // empty row is in their hands; drop it rather than fail every later call.
-  const contents: GeminiContent[] = history
-    .filter((m) => typeof m.content === "string" && m.content.trim() !== "")
-    .map((m) => ({
-      role: m.role === "assistant" ? "model" : "user",
-      parts: [{ text: m.content }],
-    }));
+  // History rows are user-writable, so they are budgeted before they reach
+  // the paid key: empty rows dropped (Gemini 400s the whole request on an
+  // empty `parts`), each row and the total capped (see budgetHistory). The
+  // daily cap bounds the number of calls; this bounds what each one costs.
+  const contents: GeminiContent[] = budgetHistory(history).map((m) => ({
+    role: m.role === "assistant" ? "model" : "user",
+    parts: [{ text: m.content }],
+  }));
   contents.push({ role: "user", parts: [{ text: next }] });
   return contents;
 };
@@ -96,7 +96,12 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  const raw = typeof body.message === "string" ? body.message.trim() : "";
+  // Postgres text cannot hold NUL; strip it so the insert below cannot fail
+  // on it.
+  const raw =
+    typeof body.message === "string"
+      ? body.message.replace(/\u0000/g, "").trim()
+      : "";
   if (raw.length === 0) {
     return NextResponse.json(
       { error: "message is required" },
@@ -150,8 +155,9 @@ export async function POST(request: NextRequest) {
     .limit(HISTORY_LIMIT);
 
   if (historyErr) {
+    console.error(`[api/chat] history read failed: ${historyErr.message}`);
     await refundQuota(user.id, quotaDay);
-    return NextResponse.json({ error: historyErr.message }, { status: 500 });
+    return NextResponse.json({ error: CHAT_UNAVAILABLE }, { status: 500 });
   }
 
   // Query was DESC for the limit; flip to chronological for the model.
@@ -162,20 +168,19 @@ export async function POST(request: NextRequest) {
     .insert({ user_id: user.id, role: "user", content: message });
 
   if (insertUserErr) {
+    console.error(`[api/chat] user message insert failed: ${insertUserErr.message}`);
     await refundQuota(user.id, quotaDay);
-    return NextResponse.json(
-      { error: insertUserErr.message },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: CHAT_UNAVAILABLE }, { status: 500 });
   }
 
   let systemPrompt: string;
   try {
     systemPrompt = await buildSystemPrompt(supabase, user.id);
   } catch (err) {
-    await refundQuota(user.id, quotaDay);
     const msg = err instanceof Error ? err.message : "context build failed";
-    return NextResponse.json({ error: msg }, { status: 500 });
+    console.error(`[api/chat] context build failed: ${msg}`);
+    await refundQuota(user.id, quotaDay);
+    return NextResponse.json({ error: CHAT_UNAVAILABLE }, { status: 500 });
   }
 
   // Pull the first chunk before committing to a 200. streamGemini throws on

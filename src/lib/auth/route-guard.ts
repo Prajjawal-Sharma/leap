@@ -24,6 +24,21 @@ export type RouteDecision =
   /** Signed in on an auth route: send on to a safe internal path. */
   | { action: "to-app"; pathname: string };
 
+const FALLBACK = "/jobs";
+
+// The proxy applies the target with `url.pathname = target`. The URL path
+// setter resolves dot segments, so a target safeNext accepts as internal —
+// "/..//evil.com", "/%2e%2e//evil.com", "/x/../..//evil.com" — comes out as
+// "//evil.com", and Next shortens a same-host Location to that relative,
+// protocol-relative form, which browsers send off-site. Run the same setter
+// here and refuse anything that lands on "//". Every other target is returned
+// exactly as before, so legitimate redirects are unchanged.
+function landsInternal(target: string): boolean {
+  const probe = new URL("http://route-guard.invalid/");
+  probe.pathname = target;
+  return !probe.pathname.startsWith("//");
+}
+
 export function decideRoute(
   pathname: string,
   nextParam: string | null,
@@ -37,10 +52,15 @@ export function decideRoute(
   }
 
   if (hasUser && isAuthRoute) {
-    // Setting .pathname alone can't change the host, but route ?next=
-    // through the shared guard anyway: one rule for every read site, and it
-    // also blocks attacker-forced internal paths like "/\evil.com".
-    return { action: "to-app", pathname: safeNext(nextParam) };
+    // ?next= is attacker-supplied: safeNext screens it (one rule for every
+    // read site — protocol-relative, backslash, control chars, schemes), and
+    // landsInternal closes the dot-segment escape that only appears once the
+    // proxy assigns the value to url.pathname.
+    const target = safeNext(nextParam);
+    return {
+      action: "to-app",
+      pathname: landsInternal(target) ? target : FALLBACK,
+    };
   }
 
   return { action: "allow" };

@@ -9,7 +9,7 @@ const SIGNED_OUT = false;
 const SIGNED_IN = true;
 
 describe("route lists", () => {
-  it("are exactly what src/middleware.ts guarded", () => {
+  it("are unchanged from the pre-proxy middleware", () => {
     assert.deepEqual(AUTH_ROUTES, ["/login", "/signup", "/forgot-password"]);
     assert.deepEqual(DASHBOARD_PREFIXES, [
       "/dashboard",
@@ -95,6 +95,54 @@ describe("decideRoute — auth routes", () => {
         { action: "to-app", pathname: "/jobs" },
         JSON.stringify(next)
       );
+    }
+  });
+
+  // These pass safeNext but resolve to "//evil.com" once assigned to
+  // url.pathname, which Next turns into an off-site Location (reproduced on
+  // dev with next start before the fix).
+  it("refuses a next that dot-segments its way to a protocol-relative path", () => {
+    for (const next of [
+      "/..//evil.com",
+      "/.//evil.com",
+      "/%2e%2e//evil.com",
+      "/%2E%2E//evil.com",
+      "/x/../..//evil.com",
+      "/..//evil.com/path?q",
+    ]) {
+      assert.deepEqual(
+        decideRoute("/login", next, SIGNED_IN),
+        { action: "to-app", pathname: "/jobs" },
+        JSON.stringify(next)
+      );
+    }
+  });
+
+  // What the proxy does with the returned pathname, end to end: whatever
+  // decideRoute returns must stay on the same origin after the setter.
+  it("never returns a pathname that leaves the origin once applied", () => {
+    const inputs = [
+      "/..//evil.com", "/./..//evil.com", "/a/b/../../..//evil.com",
+      "/%2e//evil.com", "/.%2e//evil.com", "/applications", "/jobs/../chat",
+    ];
+    for (const next of inputs) {
+      const decision = decideRoute("/login", next, SIGNED_IN);
+      assert.equal(decision.action, "to-app");
+      if (decision.action !== "to-app") continue;
+      const url = new URL("https://leap.example/login");
+      url.pathname = decision.pathname;
+      assert.equal(url.origin, "https://leap.example");
+      assert.ok(!url.pathname.startsWith("//"), `${next} → ${url.pathname}`);
+    }
+  });
+
+  // Legitimate targets are returned untouched (zero behaviour change).
+  it("returns safe targets exactly as safeNext did", () => {
+    for (const next of ["/applications", "/jobs/../chat", "/resume?tab=1"]) {
+      assert.deepEqual(decideRoute("/login", next, SIGNED_IN), {
+        action: "to-app",
+        pathname: next,
+      });
     }
   });
 });

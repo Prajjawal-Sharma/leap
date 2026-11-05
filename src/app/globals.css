@@ -16,8 +16,38 @@
    panel inside a `.light` panel inside `html.dark` would get the dark
    *tokens* but not the `dark:` *utilities*. The gallery renders its panels as
    siblings, so that case does not arise; a future nested-theme surface would
-   need a different mechanism. */
-@custom-variant dark (&:where(.dark, .dark *):not(:where(.light, .light *)));
+   need a different mechanism.
+
+   System theme: the root layout renders `data-theme="system"` (and no theme
+   class) when the user has not picked light or dark. The second branch makes
+   the variant follow the OS there, with no JS — the same `.light` exclusion
+   applies. */
+@custom-variant dark {
+  &:where(.dark, .dark *):not(:where(.light, .light *)) {
+    @slot;
+  }
+  @media (prefers-color-scheme: dark) {
+    &:where([data-theme="system"], [data-theme="system"] *):not(:where(.light, .light *)) {
+      @slot;
+    }
+  }
+}
+
+/* Collapsed sidebar (src/components/ui/sidebar.tsx). The provider's wrapper
+   carries data-sidebar-state: "expanded" | "collapsed" once the user has
+   chosen (remembered in the sidebar_state cookie), or "auto" before that.
+   Auto is collapsed on tablets (768–1023px, DESIGN §6.1) and expanded above,
+   decided by CSS so a collapsed sidebar never flashes open on first paint. */
+@custom-variant sidebar-collapsed {
+  &:where([data-sidebar-state="collapsed"] *) {
+    @slot;
+  }
+  @media (width >= 48rem) and (width < 64rem) {
+    &:where([data-sidebar-state="auto"] *) {
+      @slot;
+    }
+  }
+}
 
 /* ---------------------------------------------------------------------------
    Colour — docs/DESIGN.md §5.1. Hex exactly as the table gives it (the spec
@@ -127,6 +157,61 @@
   color-scheme: dark;
 }
 
+/* System theme on a dark OS: the .dark palette, applied to
+   html[data-theme="system"] so it follows the OS with no JS. The variable set
+   must match .dark exactly — src/lib/theme/theme-css.test.ts fails the gate
+   if the two drift. */
+@media (prefers-color-scheme: dark) {
+  [data-theme="system"] {
+    --background: #0f1115;
+    --foreground: #eceef2;
+    --card: #16191f;
+    --card-foreground: #eceef2;
+    --muted: #1c2027;
+    --muted-foreground: #9aa0ae; /* 6.72:1 */
+    --accent: #232731;
+    --accent-foreground: #eceef2;
+    --primary: #4f46e5; /* white text 6.29:1 */
+    --primary-foreground: #ffffff;
+    --brand-text: #818cf8; /* 5.90:1 */
+    --brand-soft: rgb(129 140 248 / 0.14);
+    --border: rgb(255 255 255 / 0.08);
+    --input: rgb(255 255 255 / 0.14);
+    --ring: #6366f1;
+    --destructive: #f87171; /* 6.36:1 */
+    --destructive-foreground: #14161b; /* dark text: #f87171 is a light fill */
+    --success: #4ade80; /* 10.10:1 */
+    --warning: #fbbf24; /* 10.54:1 */
+    --faint: #6b7280; /* 3.64:1 — disabled text and decorative icons only */
+
+    --popover: #16191f;
+    --popover-foreground: #eceef2;
+    --secondary: #1c2027;
+    --secondary-foreground: #eceef2;
+
+    --fit-track: rgb(236 238 242 / 0.12); /* --foreground @ 12% */
+    --switch-off: rgb(255 255 255 / 0.2);
+    --seg-thumb: #2a2f3a;
+    --tab-on: rgb(129 140 248 / 0.16);
+    --scrim: rgb(0 0 0 / 0.55);
+
+    --mk-slate-bg: #2a2f39;
+    --mk-slate-fg: #c3c9d6; /* 8.09:1 */
+    --mk-teal-bg: #10342c;
+    --mk-teal-fg: #6ee7c0; /* 8.94:1 */
+    --mk-amber-bg: #3a2e0e;
+    --mk-amber-fg: #fbbf24; /* 7.98:1 */
+    --mk-sky-bg: #102c40;
+    --mk-sky-fg: #7dd3fc; /* 8.65:1 */
+
+    --glass-bg: rgb(24 27 34 / 0.78);
+    --glass-highlight: inset 0 1px 0 rgb(255 255 255 / 0.07);
+    --glass-shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 12px 32px -8px rgb(0 0 0 / 0.5);
+
+    color-scheme: dark;
+  }
+}
+
 /* Theme-independent scalars. */
 :root {
   --radius: 12px;
@@ -161,6 +246,11 @@
   .dark {
     --glass-bg: rgb(24 27 34 / 0.96);
   }
+  @media (prefers-color-scheme: dark) {
+    [data-theme="system"] {
+      --glass-bg: rgb(24 27 34 / 0.96);
+    }
+  }
 }
 
 @media (prefers-reduced-transparency: reduce) {
@@ -174,6 +264,11 @@
   .dark {
     --glass-bg: rgb(24 27 34 / 0.96);
   }
+  @media (prefers-color-scheme: dark) {
+    [data-theme="system"] {
+      --glass-bg: rgb(24 27 34 / 0.96);
+    }
+  }
 }
 
 /* The in-app "Solid surfaces" setting (html.solid) — covers Safari, which
@@ -185,6 +280,11 @@
 }
 :root.solid.dark {
   --glass-bg: rgb(24 27 34 / 0.96);
+}
+@media (prefers-color-scheme: dark) {
+  :root.solid[data-theme="system"] {
+    --glass-bg: rgb(24 27 34 / 0.96);
+  }
 }
 .solid .light {
   --glass-bg: rgb(255 255 255 / 0.96);
@@ -379,6 +479,20 @@
 
   body {
     @apply bg-background text-foreground font-sans;
+    /* viewport-fit=cover (for the tab bar's bottom inset) also lets content
+       run under a landscape notch; keep in-flow content clear of it. Fixed
+       shell chrome adds its own inset. */
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+  }
+
+  /* The phone shell's sticky top bar and fixed tab bar must not cover the
+     element that has focus — keyboard users tabbing through a page. */
+  @media (width < 48rem) {
+    html:has([data-sidebar="wrapper"]) {
+      scroll-padding-top: calc(56px + env(safe-area-inset-top));
+      scroll-padding-bottom: calc(104px + env(safe-area-inset-bottom));
+    }
   }
 
   /* Reading comfort — DESIGN §5.3. */

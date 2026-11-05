@@ -57,7 +57,15 @@ SECTIONS
 # colours are invisible in review and silently break the other theme, so they
 # fail the gate the same way a red test does. Page PRs append their own
 # directories here as they migrate.
-UI_TOKEN_PATHS=(src/components/ui src/components/leap src/app/dev)
+UI_TOKEN_PATHS=(src/components/ui src/components/leap src/app/dev
+  src/components/shell
+  "src/app/(dashboard)/layout.tsx"
+  "src/app/(dashboard)/error.tsx"
+  "src/app/(dashboard)/loading.tsx"
+  "src/app/(dashboard)/not-found.tsx"
+  "src/app/(auth)/error.tsx"
+  src/app/not-found.tsx
+  src/app/global-error.tsx)
 
 check_tokens() {
   local present=() path files rc=0 hits

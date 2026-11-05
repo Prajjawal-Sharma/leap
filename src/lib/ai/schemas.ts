@@ -78,8 +78,14 @@ const MAX_KEYWORDS_ITEMS = 50;
 const MAX_KEYWORD_LEN = 200;
 const MAX_VERDICT_LEN = 1000;
 
+// score is the one required field. With every key defaulted, {} or a refusal
+// object ({"error": "..."} strips to {}) parsed as a successful analysis
+// scoring 0, and both score sites persisted it over the real ats_score. A
+// reply without a score is not an analysis and must take the 502-retryable
+// path. The lists and verdict keep their defaults: a thin resume can
+// legitimately get a score with few or no findings.
 export const ResumeScoreAnalysisSchema = z.object({
-  score: z.number().finite().default(0),
+  score: z.number().finite(),
   strengths: z
     .array(z.string().max(MAX_FINDING_LEN))
     .max(MAX_FINDINGS_ITEMS)
@@ -148,11 +154,17 @@ export type ResumeParseAndScore = z.infer<typeof ResumeParseAndScoreSchema>;
 // otherwise "validate" into an all-blank resume and be persisted as
 // success. A rewrite of a real resume always carries substance; a payload
 // with none is malformed output and must take the 502-retryable path.
+//
+// The same predicate gates the tailor route BEFORE the Gemini call: an
+// original with no summary, experience or skills (a sparse-but-real fresher
+// CV the parse refine accepts) can only produce a reply this refine rejects,
+// so calling the model would spend a scarce free-tier request on a
+// guaranteed 502.
+export const hasTailorableContent = (r: ParsedResume): boolean =>
+  r.summary.trim().length > 0 || r.experience.length > 0 || r.skills.length > 0;
+
 export const TailoredResumeSchema = ParsedResumeSchema.refine(
-  (r) =>
-    r.summary.trim().length > 0 ||
-    r.experience.length > 0 ||
-    r.skills.length > 0,
+  hasTailorableContent,
   {
     message:
       "tailored payload has no resume content (summary, experience, and skills all empty)",
@@ -160,3 +172,44 @@ export const TailoredResumeSchema = ParsedResumeSchema.refine(
 );
 
 export type TailoredResume = ParsedResume;
+
+// The tailor prompt keeps every experience entry ("rewrite each experience
+// description") and keeps education, certifications and languages factually
+// identical, so a count that differs from the original means the model
+// dropped or invented an entry. Skills are exempt: the prompt allows
+// dropping clearly irrelevant ones.
+const COUNT_PRESERVED_LISTS = [
+  "experience",
+  "education",
+  "certifications",
+  "languages",
+] as const;
+
+// Per-request tailor schema. TailoredResumeSchema alone cannot tell a
+// faithful rewrite from a partial one — every field defaults, so a reply
+// that omits the education block or the email still parses — and the
+// partial copy would be saved as the user's tailored resume. Count
+// mismatches fail validation (502-retryable, nothing written). Contact
+// fields are not checked but copied from the original: the prompt requires
+// them EXACTLY as given, so there is no legitimate reply in which they
+// differ, and restoring them costs nothing where a 502 would cost a retry.
+export const tailoredResumeSchemaFor = (original: ParsedResume) =>
+  TailoredResumeSchema.superRefine((r, ctx) => {
+    for (const key of COUNT_PRESERVED_LISTS) {
+      if (r[key].length !== original[key].length) {
+        ctx.addIssue({
+          code: "custom",
+          path: [key],
+          message: `tailored ${key} has ${r[key].length} entries; the original has ${original[key].length}`,
+        });
+      }
+    }
+  }).transform(
+    (r): TailoredResume => ({
+      ...r,
+      full_name: original.full_name,
+      email: original.email,
+      phone: original.phone,
+      location: original.location,
+    })
+  );

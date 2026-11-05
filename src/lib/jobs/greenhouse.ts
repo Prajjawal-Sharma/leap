@@ -96,6 +96,10 @@ function codePointToText(cp: number): string | null {
   if (cp >= 0xd800 && cp <= 0xdfff) return null;
   if (cp < 0x20 && cp !== 0x09 && cp !== 0x0a && cp !== 0x0d) return null;
   if (cp >= 0x7f && cp <= 0x9f) return null;
+  if (cp === 0xad || cp === 0x34f || cp === 0x61c || cp === 0x180e) return null;
+  if (cp === 0x115f || cp === 0x1160 || cp === 0x17b4 || cp === 0x17b5) return null;
+  if (cp === 0x3164 || cp === 0xffa0) return null;
+  if (cp >= 0xfff9 && cp <= 0xfffb) return null;
   if (cp >= 0x200b && cp <= 0x200f) return null;
   if (cp >= 0x2028 && cp <= 0x202e) return null;
   if (cp >= 0x2060 && cp <= 0x206f) return null;
@@ -113,7 +117,12 @@ function decodeEntityLayer(text: string): string {
   return text.replace(
     ENTITY_RE,
     (match, dec: string | undefined, hex: string | undefined, name: string | undefined) => {
-      if (name !== undefined) return NAMED_ENTITIES[name] ?? match;
+      // Own keys only: `&constructor;` must not resolve through the prototype.
+      if (name !== undefined) {
+        return Object.prototype.hasOwnProperty.call(NAMED_ENTITIES, name)
+          ? NAMED_ENTITIES[name]
+          : match;
+      }
       const cp = dec !== undefined ? parseInt(dec, 10) : parseInt(hex ?? "", 16);
       return codePointToText(cp) ?? match;
     }
@@ -173,24 +182,29 @@ function dropBlocks(text: string, open: RegExp, close: RegExp): string {
 const dropComments = (text: string) => dropBlocks(text, /<!--/g, /-->/g);
 
 // Removing an inner tag can reassemble an outer one (`<scr<b>ipt>`), so the
-// strip repeats. Each pass only peels one level, so nesting is capped: past
-// the cap, every `<` that could still open a tag or comment is dropped, along
-// with any `<`s directly before it. That only removes characters, never
-// creates a `<`, and afterwards no `<` is followed by a letter, `/` or `!` —
-// so nothing tag-shaped is left and the whole step stays linear.
+// strip repeats, up to a cap. Whatever survives — deeper nesting, `<!--`
+// remnants, or shapes a browser parses as markup that this grammar doesn't
+// model (`<a_b>`, `<svg:x …>`, `<!x>`) — is caught by neutraliseTagOpeners.
 const MAX_RESIDUE_PASSES = 3;
 
 function stripTagResidue(text: string): string {
   let out = text;
   for (let i = 0; i < MAX_RESIDUE_PASSES; i++) {
     const next = dropComments(out).replace(TAG_RESIDUE_RE, "");
-    if (next === out) return out.replace(/<!--/g, "");
+    if (next === out) break;
     out = next;
   }
-  // The whole run of `<`, not just the last: in `<<b>` the first `<` would
-  // otherwise open the tag once the second is gone.
-  if (out.search(TAG_RESIDUE_RE) !== -1) out = out.replace(/<+(?=[/!a-zA-Z])/g, "");
-  return out.replace(/<!--/g, "");
+  return out;
+}
+
+// The guarantee, and deliberately the LAST step: a browser only starts a tag,
+// comment or processing instruction at `<` followed by a letter, `/`, `!` or
+// `?`, so a space goes in after every such `<`. It only ever inserts, so it
+// can't join two fragments into a tag the way deleting `<!--` can, and the
+// lookahead is one character, so it is linear. Plain-text brackets keep their
+// content: "India <Karnataka, …>" reads "India < Karnataka, …>".
+function neutraliseTagOpeners(text: string): string {
+  return text.replace(/<(?=[a-zA-Z/!?])/g, "< ");
 }
 
 // Best-effort HTML → plain text. Greenhouse content is well-formed marketing
@@ -212,6 +226,7 @@ function stripTagResidue(text: string): string {
 //   5. Defensive pass on tag-shaped residue — in case a double-encoded
 //      `&amp;lt;p&amp;gt;` was decoded into a literal `<p>` by step 4.
 //   6. Collapse whitespace.
+//   7. Space out any `<` a browser could still read as a tag opener.
 export function stripHtml(html: string): string {
   let out = html;
 
@@ -224,7 +239,8 @@ export function stripHtml(html: string): string {
   out = dropComments(out);
 
   // 2. Structural tags → newlines (do this before the catch-all strip)
-  out = out.replace(/<br\s*\/?\s*>/gi, "\n");
+  // `[\s/]*`, not `\s*\/?\s*`: the two `\s*` split a long space run n ways.
+  out = out.replace(/<br[\s/]*>/gi, "\n");
   // Opening + closing of block-level tags both produce a line break so we
   // preserve list/paragraph boundaries even when the source HTML is sloppy.
   out = out.replace(
@@ -254,7 +270,9 @@ export function stripHtml(html: string): string {
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 
-  return out;
+  // 7. Nothing a browser would parse as markup survives (see above). Last, so
+  //    no later step can delete the space it inserts.
+  return neutraliseTagOpeners(out);
 }
 
 function toIsoOrNull(value: string | null | undefined): string | null {

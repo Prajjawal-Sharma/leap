@@ -36,8 +36,20 @@ describe("decodeEntities — named, decimal and hex, layer by layer", () => {
     assert.equal(decodeEntities("&#x110000;"), "&#x110000;");
   });
 
+  it("never resolves a name through the object prototype", () => {
+    for (const name of ["constructor", "toString", "valueOf", "hasOwnProperty", "__proto__"]) {
+      assert.equal(decodeEntities(`R&${name};D`), `R&${name};D`);
+    }
+  });
+
   it("leaves invisible and bidi references as written", () => {
     for (const ref of [
+      "&#x61C;",
+      "&#xAD;",
+      "&#x180E;",
+      "&#x34F;",
+      "&#xFFF9;",
+      "&#x3164;",
       "&#x200B;",
       "&#x202E;",
       "&#x2066;",
@@ -130,10 +142,37 @@ describe("stripHtml — escaped Greenhouse content to plain text", () => {
     }
   });
 
+  // A browser starts markup only at `<` + letter, `/`, `!` or `?`.
+  const TAG_OPENER = /<[a-zA-Z/!?]/;
+
   it("never leaves a tag behind however deeply it is nested", () => {
     const nested = "<p>" + "&lt;".repeat(50) + "b&gt;".repeat(50) + "x</p>";
-    assert.doesNotMatch(stripHtml(nested), /<[a-z/!]/i);
-    assert.doesNotMatch(stripHtml("<p>&lt;!-- hidden</p><p>rest</p>"), /<!--/);
+    assert.doesNotMatch(stripHtml(nested), TAG_OPENER);
+    assert.doesNotMatch(stripHtml("<p>&lt;!-- hidden</p><p>rest</p>"), TAG_OPENER);
+  });
+
+  it("never reassembles a tag around a removed comment or odd name", () => {
+    // Review round 2: shapes the residue grammar doesn't model, and
+    // fragments a `<!--` removal used to join back into a live tag.
+    for (const inner of [
+      "&lt;scr&lt;!--ipt&gt;alert(1)&lt;/scr&lt;!--ipt&gt;",
+      "&lt;img&lt;!-- src=x onerror=alert(1)&gt;",
+      "&lt;a&lt;!--b&gt;",
+      "&lt;!-&lt;!--- hidden &gt;",
+      "&lt;a_b&gt;",
+      "&lt;svg:x onload=1&gt;",
+      "&lt;img&quot;x&quot; onerror=alert(1)&gt;",
+      "&lt;img src=x onerror=alert(1) x=a&quot;b&gt;",
+      "&lt;!x&gt;",
+      "&lt;/1&gt;",
+      "&lt;?x&gt;",
+      "&lt;img src=x onerror=alert(1)",
+    ]) {
+      const escaped = "&lt;p&gt;Role&lt;/p&gt;" + inner.replace(/&/g, "&amp;");
+      for (const input of [escaped, "<p>Role</p>" + inner]) {
+        assert.doesNotMatch(stripHtml(input), TAG_OPENER, input);
+      }
+    }
   });
 
   it("stays fast on adversarial runs of unclosed tags", () => {
@@ -147,6 +186,12 @@ describe("stripHtml — escaped Greenhouse content to plain text", () => {
       "<script>" + "<script".repeat(100_000),
       "<!--".repeat(200_000),
       "<p>" + "&lt;!--".repeat(200_000) + "</p>",
+      "<br" + " ".repeat(500_000),
+      // Five-deep nesting hits the residue pass cap, then a long `<` run.
+      "&lt;p&gt;x&lt;/p&gt;" +
+        "&amp;lt;a".repeat(5) + "&amp;gt;".repeat(5) +
+        "&amp;lt;".repeat(150_000) + "1",
+      "<p>x</p>" + "&lt;a".repeat(7) + "&gt;".repeat(7) + "&lt;".repeat(150_000) + "1",
     ]) {
       const started = performance.now();
       stripHtml(input);
@@ -157,11 +202,12 @@ describe("stripHtml — escaped Greenhouse content to plain text", () => {
   it("keeps angle brackets that are plain text", () => {
     // Real snippets from the 2026-10-26 board payloads (Twilio, Cloudflare,
     // Figma, Airbnb); the old `<[^>]*>` residue strip deleted the first two.
+    // A `<` before a letter gains a space so it can never open a tag.
     assert.equal(
       stripHtml(
         "&lt;p&gt;based in India &amp;lt;Karnataka, Tamil Nadu and New Delhi&amp;gt;.&lt;/p&gt;"
       ),
-      "based in India <Karnataka, Tamil Nadu and New Delhi>."
+      "based in India < Karnataka, Tamil Nadu and New Delhi>."
     );
     assert.equal(
       stripHtml("&lt;ul&gt;&lt;li&gt;Ensure customer satisfaction&lt;/li&gt;&lt;li&gt;&amp;lt; 60% travel&lt;/li&gt;&lt;/ul&gt;"),
@@ -193,12 +239,11 @@ describe("stripHtml — escaped Greenhouse content to plain text", () => {
       "based in India ."
     ));
 
-  // Ingest strips raw payloads once; it never re-strips stored text. Output
-  // that legitimately keeps `<Word, …>` (see above) is not HTML and is left
-  // out of this list on purpose.
   it("is idempotent on its own output", () => {
     for (const input of [
       "&lt;p&gt;VPs of R&amp;amp;D&lt;/p&gt;",
+      "&lt;p&gt;based in India &amp;lt;Karnataka, Tamil Nadu&amp;gt;.&lt;/p&gt;",
+      "&lt;p&gt;Role&lt;/p&gt;&amp;lt;scr&amp;lt;!--ipt&amp;gt;",
       "&lt;li&gt;customers (&amp;lt;5000 FTEs) from 0&amp;gt;1&lt;/li&gt;",
       "&lt;p&gt;don&amp;#8217;t&amp;nbsp;stop&lt;/p&gt;",
       "<p>&lt;script&gt;x&lt;/script&gt;</p>",

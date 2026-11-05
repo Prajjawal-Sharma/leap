@@ -6,7 +6,7 @@
 
 ## 1. Why this exists
 
-The loop that shipped PRs #12–#24 without a production incident was always the same: recon → tight spec → build → gates → adversarial review → PR with review artifacts → human review → merge. Every one of those PRs still had a real bug caught at review (tab-injection bypass, freshness exemption, base-branch retarget, score-route leak). This pipeline makes the checks automatic and bounded; it does not remove the human review that caught them.
+The loop that shipped PRs #12–#24 without a production incident was always the same: recon → tight spec → build → gates → adversarial review → PR (review artifacts in the session report) → human review → merge. Every one of those PRs still had a real bug caught at review (tab-injection bypass, freshness exemption, base-branch retarget, score-route leak). This pipeline makes the checks automatic and bounded; it does not remove the human review that caught them.
 
 **Non-negotiables (enforced by hooks, not by trust):**
 - The agent never merges a PR and never pushes to `main`.
@@ -262,7 +262,7 @@ Compare `git diff dev...HEAD` to (1) the spec and (2) the Definition of Done in 
 Output three tables:
 1. Spec requirements: `| Requirement | Met / Partial / Missing | Evidence (file:line) |`
 2. Definition of Done: `| Item | Pass / Fail | Evidence |`
-3. Deviations from spec: `| Deviation | Declared in PR? | Justified? |`
+3. Deviations from spec: `| Deviation | Declared in session report? | Justified? |`
 
 Then list every acceptance item that needs a human (manual tests, migrations to apply, dashboard steps, env vars). Do not fix anything.
 ```
@@ -301,7 +301,7 @@ You are running Leap's ship pipeline for this spec:
 
 $ARGUMENTS
 
-Rules that override everything: never merge; never push main; every PR targets dev with `--base dev`; a human applies migrations; stop at the two gates below.
+Rules that override everything: never merge; never push main; every PR targets dev with `--base dev`; a human applies migrations; commits carry no Co-Authored-By or session trailers; stop at the two gates below.
 
 ## Phase A — Preflight and recon (READ-ONLY, no edits, no branch yet)
 1. `git status` must be clean and on `dev`; then `git pull`. If not clean, stop and report.
@@ -320,9 +320,9 @@ Rules that override everything: never merge; never push main; every PR targets d
 10. Fix every CONFIRMED finding. Note UNCERTAIN and REFUTED without acting. Re-run `gate.sh`. If a CONFIRMED critical/high remains after round 2, stop and report.
 
 ## Phase D — PR, then STOP
-11. Fill `.github/pull_request_template.md` completely. Review artifacts are mandatory: verbatim schemas and guards, query audit tables, acceptance evidence, the reviewers' tables (found / fixed / deferred), deliberate deviations with reasons, migration sequencing, and a "Human must do" list.
+11. Write the PR body with .github/pull_request_template.md: Summary (2–4 sentences, what and why), Changes (3–8 bullets describing behaviour, not file lists), Testing (what was verified, one line each), Notes only for migrations, configuration or known limitations. No reviewer tables, verbatim code, diffs, "Human must do" lists, or mentions of AI, agents or sessions.
 12. `git push -u origin <branch>` then `gh pr create --base dev --title "<type>: <summary>" --body-file <tmpfile>`.
-13. `rm -f .claude/.ship-active`. Print the PR URL and the "Human must do" list. **STOP. Do not merge.**
+13. `rm -f .claude/.ship-active`. Print in the session (not the PR): the PR URL, review artifacts, reviewer table (found/fixed/deferred), deliberate deviations, migration sequencing, and the "Human must do" checklist. **STOP. Do not merge.**
 
 If you must pause for a human decision during B or C: `rm -f .claude/.ship-active`, ask, and `touch` it again when resuming.
 ```
@@ -385,38 +385,17 @@ Report facts with file:line references, mark each claim TRUE / FALSE / UNVERIFIA
 ### 5.14 `.github/pull_request_template.md`
 
 ```markdown
-## Summary / why
+## Summary
+<!-- What this PR does and why, in 2–4 sentences. -->
 
 ## Changes
-- files:
+-
 
-## Migrations
-- Number:            Idempotent: yes/no
-- Apply BEFORE or AFTER deploy, and why:
+## Testing
+-
 
-## Review artifacts (mandatory)
-### Schemas / guards (verbatim)
-### Query audit
-| Query | Verdict | Why safe |
-|---|---|---|
-### Acceptance evidence
-| Criterion | Proof |
-|---|---|
-
-## Adversarial review
-| # | Reviewer | Severity | Finding | Status (fixed / deferred / refuted) |
-|---|---|---|---|---|
-
-## Deliberate deviations from spec
-
-## Deferred (with reason)
-
-## Human must do
-- [ ] manual tests:
-- [ ] migration to apply:
-- [ ] dashboard / env steps:
-
-## Untouched (verified by diff)
+## Notes
+<!-- Migrations, configuration or follow-ups. Delete if none. -->
 ```
 
 ### 5.15 `docs/specs/_TEMPLATE.md` (what the PM writes)
@@ -441,7 +420,7 @@ deep: false            # true → extra security pass
 - gates green (tsc, eslint 0 warnings, tests, build)
 - ...
 
-## Review artifacts required in the PR
+## Review artifacts required in the session report
 
 ## Migration sequencing (if any)
 ```
@@ -449,11 +428,11 @@ deep: false            # true → extra security pass
 ### 5.16 `docs/REVIEW_CHECKLIST.md` (what the PM checks — bring these to the review)
 
 1. Base branch is `dev`. No stale stacked base.
-2. Every schema/guard/security predicate pasted verbatim — read it, don't trust the summary.
+2. Every schema/guard/security predicate quoted verbatim in the session report — read it, don't trust the summary.
 3. Every query audit lists the actual query, not a description.
 4. For Gemini JSON sites: caps justified by observed output from that prompt; refine accepts sparse-real data.
 5. Ordering guarantees stated for anything that bills or persists (gate before insert before model call).
-6. Migration is numbered, idempotent, and the PR says whether it goes before or after deploy.
+6. Migration is numbered, idempotent, and the PR Notes say whether it goes before or after deploy.
 7. Adversarial table: every CONFIRMED item is fixed or explicitly deferred with a reason.
 8. "Human must do" list is complete — manual tests, dashboard steps, env vars.
 9. Deviations from spec are declared and justified.
@@ -485,7 +464,7 @@ Correct these facts first (verified by the July recon, all currently wrong or st
 - Every `resumes` read that expects a primary/uploaded resume filters `kind='uploaded'`; only the upload promote step writes `is_primary=true`.
 - Migrations: next number, idempotent (`if not exists` / `drop ... if exists`), additive-first, applied by a human; PR states before/after-deploy.
 - No new dependency without a spec-approved reason.
-- PR body follows the template; review artifacts are verbatim.
+- PR body follows the template (summary, changes, testing, notes); review artifacts and the human checklist go in the session report, not the PR.
 - Never merge. Never push main. Always `gh pr create --base dev`.
 
 ### Model & key routing
@@ -559,6 +538,6 @@ Manual, outside the pipeline: the dev→main deploy, Supabase URL config and cus
 1. Claude.ai: "next up is error boundaries" → I return a spec in the §5.15 format.
 2. Terminal: `/clear`, then `/ship <paste spec>` → plan → "go" → PR URL.
 3. AI Studio: paste spec + `git diff dev...HEAD` with the §5.17 prompt → findings.
-4. Claude.ai: paste PR body (or I read it via the GitHub connector) + Gemini findings → I review against §5.16 → "merge" or notes.
+4. Claude.ai: paste the session report (or I read the PR via the GitHub connector) + Gemini findings → I review against §5.16 → "merge" or notes.
 5. Notes → `/revise <notes>` → repeat 4. Merge → `/retro <PR#>`.
 6. Jules (acct 2): "write tests for PR #N on dev" → small PR through the same review.

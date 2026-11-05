@@ -186,8 +186,8 @@ export async function POST(request: NextRequest) {
   const original = originalValidated.data;
 
   // Checked before the job lookup and the Gemini call: with nothing to
-  // rewrite, the reply can only fail TailoredResumeSchema's refine, and every
-  // retry would spend a free-tier request (20/day/key) on a guaranteed 502.
+  // rewrite, a faithful reply can only fail TailoredResumeSchema's refine,
+  // and every retry would spend a free-tier request (20/day/key) on a 502.
   if (!hasTailorableContent(original)) {
     return NextResponse.json(
       {
@@ -230,8 +230,9 @@ export async function POST(request: NextRequest) {
       { temperature: 0.4, model: TAILOR_MODEL }
     );
     const rawJson: unknown = JSON.parse(stripFences(raw));
-    // Per-request schema: rejects dropped or invented list entries and
-    // restores contact fields from the original (see schemas.ts).
+    // Per-request schema: rejects dropped, invented or blanked entries and a
+    // blanked summary, and restores contact fields from the original (see
+    // schemas.ts).
     const validated = tailoredResumeSchemaFor(original).safeParse(rawJson);
     if (!validated.success) {
       // Persist nothing — the client can simply retry.

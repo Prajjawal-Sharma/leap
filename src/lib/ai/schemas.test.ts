@@ -403,6 +403,17 @@ describe("hasTailorableContent", () => {
       assert.equal(hasTailorableContent(r), true, JSON.stringify(extra));
     }
   });
+
+  it("counts an entry with any one field filled, and one real skill", () => {
+    for (const extra of [
+      { experience: [{ description: "Built weekly sales dashboards." }] },
+      { experience: [{ duration: "Jun 2025 – Aug 2025" }] },
+      { skills: ["", "SQL"] },
+    ]) {
+      const r = ParsedResumeSchema.parse({ ...fresherResume, ...extra });
+      assert.equal(hasTailorableContent(r), true, JSON.stringify(extra));
+    }
+  });
 });
 
 describe("tailoredResumeSchemaFor", () => {
@@ -479,11 +490,6 @@ describe("tailoredResumeSchemaFor", () => {
       "experience",
       fullResume.experience.map((e) => ({ description: e.description })),
     ],
-    [
-      "one blanked company",
-      "experience",
-      [{ ...fullResume.experience[0], company: "" }, fullResume.experience[1]],
-    ],
     ["an empty education row", "education", [{}]],
     ["a blank certification", "certifications", [""]],
     ["a blank language", "languages", ["English", " "]],
@@ -495,6 +501,47 @@ describe("tailoredResumeSchemaFor", () => {
       assertSingleIssue(r, [key], "custom");
     });
   }
+
+  // Every field is pinned, so dropping one from the per-field check fails.
+  for (const field of ["company", "role", "duration", "description"] as const) {
+    it(`rejects a blanked experience ${field}`, () => {
+      const r = schema.safeParse({
+        ...rewrite,
+        experience: [
+          { ...fullResume.experience[0], [field]: "" },
+          fullResume.experience[1],
+        ],
+      });
+      assertSingleIssue(r, ["experience"], "custom");
+    });
+  }
+
+  for (const field of ["institution", "degree", "year"] as const) {
+    it(`rejects a blanked education ${field}`, () => {
+      const r = schema.safeParse({
+        ...rewrite,
+        education: [{ ...fullResume.education[0], [field]: " " }],
+      });
+      assertSingleIssue(r, ["education"], "custom");
+    });
+  }
+
+  it("rejects a reply that blanks or omits the original's summary", () => {
+    const omitted: Record<string, unknown> = { ...rewrite };
+    delete omitted.summary;
+    for (const reply of [{ ...rewrite, summary: " " }, omitted]) {
+      assertSingleIssue(schema.safeParse(reply), ["summary"], "custom");
+    }
+  });
+
+  it("accepts no summary when the original has none", () => {
+    const noSummary = ParsedResumeSchema.parse({ ...fullResume, summary: "" });
+    const r = tailoredResumeSchemaFor(noSummary).safeParse({
+      ...fullResume,
+      summary: "",
+    });
+    assert.equal(r.success, true);
+  });
 
   it("rejects an all-blank reply that keeps every count", () => {
     const r = schema.safeParse({
@@ -517,6 +564,35 @@ describe("tailoredResumeSchemaFor", () => {
       experience: [...fullResume.experience].reverse(),
       education: fullResume.education,
     });
+    assert.equal(r.success, true);
+  });
+
+  // An entry-by-entry comparison would reject this: index 0 had a duration
+  // in the original and has none in the reply.
+  it("accepts reordered entries whose fill patterns differ", () => {
+    const noDuration = { ...fullResume.experience[1], duration: "" };
+    const mixed = ParsedResumeSchema.parse({
+      ...fullResume,
+      experience: [fullResume.experience[0], noDuration],
+    });
+    const r = tailoredResumeSchemaFor(mixed).safeParse({
+      ...rewrite,
+      experience: [noDuration, fullResume.experience[0]],
+    });
+    assert.equal(r.success, true);
+  });
+
+  // A blank entry is not data, so tidying it away must not 502 on every
+  // retry.
+  it("accepts a reply that drops an original's blank entries", () => {
+    const withBlanks = ParsedResumeSchema.parse({
+      ...fullResume,
+      experience: [...fullResume.experience, {}],
+      education: [...fullResume.education, {}],
+      certifications: [...fullResume.certifications, ""],
+      languages: [...fullResume.languages, " "],
+    });
+    const r = tailoredResumeSchemaFor(withBlanks).safeParse(rewrite);
     assert.equal(r.success, true);
   });
 

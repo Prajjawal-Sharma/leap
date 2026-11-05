@@ -86,15 +86,23 @@ const NAMED_ENTITIES: Record<string, string> = {
 const ENTITY_RE =
   /&(?:#(\d{1,7})|#[xX]([0-9a-fA-F]{1,6})|([a-zA-Z][a-zA-Z0-9]{0,31}));/g;
 
-// Numeric references outside Unicode, lone surrogates, and control characters
-// other than tab/newline/CR stay as written rather than smuggling invisible
-// bytes into stored text.
+// Numeric references outside Unicode, lone surrogates, noncharacters, control
+// characters other than tab/newline/CR, and invisible format characters
+// (zero-width, bidi overrides/isolates, BOM, Unicode tag characters) stay as
+// written rather than smuggling invisible text into stored titles and prompts.
 function codePointToText(cp: number): string | null {
   if (cp === 0xa0) return " ";
   if (cp > 0x10ffff) return null;
   if (cp >= 0xd800 && cp <= 0xdfff) return null;
   if (cp < 0x20 && cp !== 0x09 && cp !== 0x0a && cp !== 0x0d) return null;
   if (cp >= 0x7f && cp <= 0x9f) return null;
+  if (cp >= 0x200b && cp <= 0x200f) return null;
+  if (cp >= 0x2028 && cp <= 0x202e) return null;
+  if (cp >= 0x2060 && cp <= 0x206f) return null;
+  if (cp === 0xfeff) return null;
+  if (cp >= 0xfdd0 && cp <= 0xfdef) return null;
+  if ((cp & 0xfffe) === 0xfffe) return null;
+  if (cp >= 0xe0000 && cp <= 0xe007f) return null;
   return String.fromCodePoint(cp);
 }
 
@@ -132,20 +140,57 @@ function isEscapedHtml(text: string): boolean {
   return /&lt;\/?[a-zA-Z]/i.test(text) && !/<\/?[a-zA-Z][^<>]*>/.test(text);
 }
 
-// Only tag-shaped text: a name right after `<`, then attributes on the same
-// line. Text such as "India <Karnataka, Tamil Nadu>", "(<5000 FTEs)" or "0>1"
-// survives — the old `<[^>]*>` deleted everything between a stray `<` and the
-// next `>`. Repeated until stable so `<scr<b>ipt>` can't reassemble a tag.
-const TAG_RESIDUE_RE = /<!--[\s\S]*?-->|<\/?[a-zA-Z][a-zA-Z0-9-]*(?:\s[^<>\n]*)?\/?>/g;
+// Only tag-shaped text: a name right after `<`, then — after whitespace or `/`,
+// both of which browsers accept as attribute separators — anything up to `>`,
+// across lines, with quoted values allowed to contain `<` and `>`. Text such as
+// "India <Karnataka, Tamil Nadu>", "(<5000 FTEs)" or "0>1" survives: the old
+// `<[^>]*>` deleted everything between a stray `<` and the next `>`.
+// The attribute alternatives start with disjoint characters and stop at an
+// unquoted `<`, so a scan from each `<` ends at the next one — linear time.
+const TAG_RESIDUE_RE =
+  /<\/?[a-zA-Z][a-zA-Z0-9-]*(?:[\s/](?:"[^"]*"|'[^']*'|[^<>"'])*)?>/g;
+
+// Same result as `/<open[\s\S]*?close/gi` — each opener through the first
+// closer after it — without that regex's quadratic rescan: with many openers
+// and no closer, every opener scans to the end (`<style` x200k took 54s).
+// Once no closer follows an opener, none follows any later opener either.
+function dropBlocks(text: string, open: RegExp, close: RegExp): string {
+  let out = "";
+  let pos = 0;
+  for (;;) {
+    open.lastIndex = pos;
+    const o = open.exec(text);
+    if (!o) break;
+    close.lastIndex = o.index + o[0].length;
+    const c = close.exec(text);
+    if (!c) break;
+    out += text.slice(pos, o.index);
+    pos = c.index + c[0].length;
+  }
+  return out + text.slice(pos);
+}
+
+const dropComments = (text: string) => dropBlocks(text, /<!--/g, /-->/g);
+
+// Removing an inner tag can reassemble an outer one (`<scr<b>ipt>`), so the
+// strip repeats. Each pass only peels one level, so nesting is capped: past
+// the cap, every `<` that could still open a tag or comment is dropped, along
+// with any `<`s directly before it. That only removes characters, never
+// creates a `<`, and afterwards no `<` is followed by a letter, `/` or `!` —
+// so nothing tag-shaped is left and the whole step stays linear.
+const MAX_RESIDUE_PASSES = 3;
 
 function stripTagResidue(text: string): string {
   let out = text;
-  let prev: string;
-  do {
-    prev = out;
-    out = out.replace(TAG_RESIDUE_RE, "");
-  } while (out !== prev);
-  return out;
+  for (let i = 0; i < MAX_RESIDUE_PASSES; i++) {
+    const next = dropComments(out).replace(TAG_RESIDUE_RE, "");
+    if (next === out) return out.replace(/<!--/g, "");
+    out = next;
+  }
+  // The whole run of `<`, not just the last: in `<<b>` the first `<` would
+  // otherwise open the tag once the second is gone.
+  if (out.search(TAG_RESIDUE_RE) !== -1) out = out.replace(/<+(?=[/!a-zA-Z])/g, "");
+  return out.replace(/<!--/g, "");
 }
 
 // Best-effort HTML → plain text. Greenhouse content is well-formed marketing
@@ -174,21 +219,24 @@ export function stripHtml(html: string): string {
   if (isEscapedHtml(out)) out = decodeEntityLayer(out);
 
   // 1. Block elements that carry their own content
-  out = out.replace(/<style\b[\s\S]*?<\/style>/gi, "");
-  out = out.replace(/<script\b[\s\S]*?<\/script>/gi, "");
-  out = out.replace(/<!--[\s\S]*?-->/g, "");
+  out = dropBlocks(out, /<style\b/gi, /<\/style>/gi);
+  out = dropBlocks(out, /<script\b/gi, /<\/script>/gi);
+  out = dropComments(out);
 
   // 2. Structural tags → newlines (do this before the catch-all strip)
   out = out.replace(/<br\s*\/?\s*>/gi, "\n");
   // Opening + closing of block-level tags both produce a line break so we
   // preserve list/paragraph boundaries even when the source HTML is sloppy.
   out = out.replace(
-    /<\/?(p|div|li|ul|ol|tr|table|h[1-6]|section|article|header|footer|nav|aside)\b[^>]*>/gi,
+    /<\/?(p|div|li|ul|ol|tr|table|h[1-6]|section|article|header|footer|nav|aside)\b[^<>]*>/gi,
     "\n"
   );
 
-  // 3. Strip everything else (spans, anchors with hrefs, strong, em, …)
-  out = out.replace(/<\/?[a-zA-Z][^>]*>/g, "");
+  // 3. Strip everything else (spans, anchors with hrefs, strong, em, …).
+  //    `[^<>]`, not `[^>]`: with `[^>]` every `<a` in a long run with no `>`
+  //    rescans to the end of the string (1.5 MB took minutes, past the
+  //    cron's 60s). An attribute value holding `<` is left to step 5.
+  out = out.replace(/<\/?[a-zA-Z][^<>]*>/g, "");
 
   // 4. Decode entities
   out = decodeEntities(out);
@@ -228,6 +276,9 @@ function normalizeJob(
   if (!job?.id || !job.title || !job.absolute_url) {
     return null;
   }
+  // Checked after decoding too: a title of only `&nbsp;` is no title.
+  const title = decodeEntities(job.title).trim();
+  if (!title) return null;
 
   const locationName = decodeEntities(job.location?.name ?? "").trim();
   const officeNames = (job.offices ?? [])
@@ -246,7 +297,7 @@ function normalizeJob(
   return {
     source: "greenhouse",
     source_id: String(job.id),
-    title: decodeEntities(job.title).trim(),
+    title,
     company,
     location,
     is_remote: detectRemote(locationName, officeNames),

@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { decodeEntities, stripHtml } from "./greenhouse";
+import { decodeEntities, fetchGreenhouseJobs, stripHtml } from "./greenhouse";
 
 describe("decodeEntities — named, decimal and hex, layer by layer", () => {
   it("decodes a double-encoded ampersand", () =>
@@ -34,6 +34,21 @@ describe("decodeEntities — named, decimal and hex, layer by layer", () => {
     assert.equal(decodeEntities("&#127;"), "&#127;");
     assert.equal(decodeEntities("&#xD800;"), "&#xD800;");
     assert.equal(decodeEntities("&#x110000;"), "&#x110000;");
+  });
+
+  it("leaves invisible and bidi references as written", () => {
+    for (const ref of [
+      "&#x200B;",
+      "&#x202E;",
+      "&#x2066;",
+      "&#xFEFF;",
+      "&#xE0041;",
+      "&#xFFFF;",
+      "&#xFDD0;",
+      "&#x2028;",
+    ]) {
+      assert.equal(decodeEntities(ref), ref);
+    }
   });
 
   it("stops after three layers", () =>
@@ -100,6 +115,45 @@ describe("stripHtml — escaped Greenhouse content to plain text", () => {
     );
   });
 
+  it("strips tags whose attributes use / or newlines as separators", () => {
+    // Shapes browsers parse as tags; review round 1 found these surviving.
+    for (const input of [
+      "&lt;p&gt;&amp;lt;svg/onload=alert(1)&amp;gt;&lt;/p&gt;",
+      "&lt;p&gt;&amp;lt;img/src=x/onerror=alert(1)&amp;gt;&lt;/p&gt;",
+      "&lt;p&gt;&amp;lt;img&#10;src=x&#10;onerror=alert(1)&amp;gt;&lt;/p&gt;",
+      "<p>&lt;img src=x&#10;onerror=alert(1)&gt;</p>",
+      "<p>&lt;iframe/src=javascript:alert(1)&gt;</p>",
+      '<p>&lt;img alt=&quot;&lt;&quot; src=x onerror=alert(1)&gt;</p>',
+      "<p>&lt;script/src=//e.example&gt;&lt;/script&gt;</p>",
+    ]) {
+      assert.doesNotMatch(stripHtml(input), /<[a-z/!]/i, input);
+    }
+  });
+
+  it("never leaves a tag behind however deeply it is nested", () => {
+    const nested = "<p>" + "&lt;".repeat(50) + "b&gt;".repeat(50) + "x</p>";
+    assert.doesNotMatch(stripHtml(nested), /<[a-z/!]/i);
+    assert.doesNotMatch(stripHtml("<p>&lt;!-- hidden</p><p>rest</p>"), /<!--/);
+  });
+
+  it("stays fast on adversarial runs of unclosed tags", () => {
+    for (const input of [
+      "<a ".repeat(200_000),
+      "<p " .repeat(200_000),
+      "<p>" + "&lt;".repeat(20_000) + "b&gt;".repeat(20_000) + "</p>",
+      "&lt;p&gt;" + "&amp;lt;a".repeat(20_000) + "&amp;gt;".repeat(20_000) + "&lt;/p&gt;",
+      "<p>" + '&lt;a "'.repeat(100_000) + "</p>",
+      "</style>" + "<style".repeat(100_000),
+      "<script>" + "<script".repeat(100_000),
+      "<!--".repeat(200_000),
+      "<p>" + "&lt;!--".repeat(200_000) + "</p>",
+    ]) {
+      const started = performance.now();
+      stripHtml(input);
+      assert.ok(performance.now() - started < 1_000, input.slice(0, 20));
+    }
+  });
+
   it("keeps angle brackets that are plain text", () => {
     // Real snippets from the 2026-10-26 board payloads (Twilio, Cloudflare,
     // Figma, Airbnb); the old `<[^>]*>` residue strip deleted the first two.
@@ -152,5 +206,48 @@ describe("stripHtml — escaped Greenhouse content to plain text", () => {
       const once = stripHtml(input);
       assert.equal(stripHtml(once), once, input);
     }
+  });
+});
+
+describe("fetchGreenhouseJobs — titles and locations are decoded", () => {
+  const board = (jobs: unknown[]) => async () =>
+    new Response(JSON.stringify({ jobs }), { status: 200 });
+  const job = (over: Record<string, unknown>) => ({
+    id: 1,
+    title: "Engineer",
+    absolute_url: "https://boards.greenhouse.io/x/jobs/1",
+    content: "&lt;p&gt;Body&lt;/p&gt;",
+    ...over,
+  });
+
+  it("decodes the title and location without stripping tags", async (t) => {
+    t.mock.method(
+      globalThis,
+      "fetch",
+      board([
+        job({
+          title: "Head of R&amp;D &#8212; Platform",
+          location: { name: "S&atilde;o Paulo &amp; Remote" },
+        }),
+      ])
+    );
+    const [j] = await fetchGreenhouseJobs("mongodb");
+    assert.equal(j.title, "Head of R&D — Platform");
+    assert.equal(j.location, "S&atilde;o Paulo & Remote");
+    assert.equal(j.is_remote, true);
+    assert.equal(j.description, "Body");
+  });
+
+  it("drops a job whose title decodes to nothing", async (t) => {
+    t.mock.method(
+      globalThis,
+      "fetch",
+      board([job({ id: 1, title: "&nbsp;" }), job({ id: 2, title: "Designer" })])
+    );
+    const jobs = await fetchGreenhouseJobs("figma");
+    assert.deepEqual(
+      jobs.map((j) => j.source_id),
+      ["2"]
+    );
   });
 });

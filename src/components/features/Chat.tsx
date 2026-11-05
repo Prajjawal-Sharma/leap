@@ -10,6 +10,7 @@ import {
   type KeyboardEvent,
 } from "react";
 
+import { dailyLimitMessage } from "@/lib/chat/quota";
 import type { ChatMessage } from "@/types/chat";
 
 type Props = {
@@ -130,9 +131,7 @@ export default function Chat({ initialMessages }: Props) {
               prev.filter((m) => m.id !== userId && m.id !== assistantId)
             );
             setInput(trimmed);
-            setLimitNotice(
-              `You've reached today's chat limit (${limit} messages). It resets at midnight UTC.`
-            );
+            setLimitNotice(dailyLimitMessage(limit, payload?.resets_at));
             return;
           }
           const msg =

@@ -1,5 +1,12 @@
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
-import { streamText, type ModelMessage } from "ai";
+import {
+  APICallError,
+  RetryError,
+  streamText,
+  type ModelMessage,
+} from "ai";
+
+import { textDeltas } from "./text-deltas";
 
 // Three call paths into the Gemini API:
 //
@@ -550,14 +557,43 @@ export type StreamGeminiOptions = {
   systemInstruction?: string;
   temperature?: number;
   model?: string;
+  /** Aborting before the first chunk surfaces as a retryable GeminiError. */
+  abortSignal?: AbortSignal;
 };
 
 // Chat runs on the paid Tier 1 key through the Vercel AI SDK rather than the
 // free rotation: a live conversation can't tolerate the rotation's "all keys
 // cooling, retry in 60s" stalls. We map the GeminiContent history onto AI SDK
 // ModelMessages and hand back the raw text-delta stream; the caller owns
-// persistence and client framing. Per the textStream contract, a mid-stream
-// failure throws into the consumer (the route pump), which surfaces it.
+// persistence and client framing. Deltas come from fullStream via textDeltas,
+// not result.textStream: textStream silently drops error parts, so a non-2xx
+// used to look like an empty reply. Now any failure throws into the consumer
+// — before the first chunk (the route refunds the quota slot) or mid-stream
+// (the route pump surfaces it).
+//
+// Messages are for server logs only (the chat route never forwards them),
+// and are scrubbed of key material anyway: a malformed key value is echoed
+// verbatim by fetch's header validation ("... is an invalid header value").
+const redactKeys = (message: string): string => {
+  let out = message;
+  for (const { key } of allEntries) out = out.split(key).join("[redacted]");
+  return out.replace(/AIza[0-9A-Za-z_-]{8,}/g, "[redacted]");
+};
+
+const toGeminiStreamError = (raw: unknown): GeminiError => {
+  // After the SDK's own retries a retryable failure arrives wrapped.
+  const cause = RetryError.isInstance(raw) ? raw.lastError : raw;
+  if (APICallError.isInstance(cause)) {
+    return new GeminiError(
+      redactKeys(cause.message),
+      cause.statusCode ?? 502,
+      cause.isRetryable
+    );
+  }
+  const message = cause instanceof Error ? cause.message : "chat stream failed";
+  return new GeminiError(redactKeys(message), 502, true);
+};
+
 export async function streamGemini(
   contents: GeminiContent[],
   opts: StreamGeminiOptions = {}
@@ -575,7 +611,8 @@ export async function streamGemini(
     messages,
     temperature: opts.temperature ?? 0.7,
     ...(opts.systemInstruction ? { system: opts.systemInstruction } : {}),
+    ...(opts.abortSignal ? { abortSignal: opts.abortSignal } : {}),
   });
 
-  return result.textStream;
+  return textDeltas(result.fullStream, toGeminiStreamError);
 }

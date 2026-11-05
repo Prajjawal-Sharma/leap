@@ -1,4 +1,5 @@
 {
+  "attribution": { "commit": "", "pr": "", "sessionUrl": false },
   "permissions": {
     "allow": [
       "Bash(npm run *)", "Bash(npm test*)", "Bash(npx tsc*)", "Bash(npx eslint*)",

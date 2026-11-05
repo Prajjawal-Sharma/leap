@@ -97,7 +97,7 @@ the daily pool on every cold start, so leave it unset there.
 - Every `resumes` read that expects a primary/uploaded resume filters `kind='uploaded'`; only the upload promote step writes `is_primary=true`.
 - Migrations: next number, idempotent (`if not exists` / `drop ... if exists`), additive-first, applied by a human; PR states before/after-deploy.
 - No new dependency without a spec-approved reason.
-- PR body follows the template; review artifacts are verbatim.
+- PR body follows the template (summary, changes, testing, notes); review artifacts and the human checklist go in the session report, not the PR.
 - Never merge. Never push main. Always `gh pr create --base dev`.
 
 ### Pitfalls (append via /retro; keep one line each)

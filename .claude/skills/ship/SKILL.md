@@ -8,7 +8,7 @@ You are running Leap's ship pipeline for this spec:
 
 $ARGUMENTS
 
-Rules that override everything: never merge; never push main; every PR targets dev with `--base dev`; a human applies migrations; stop at the two gates below.
+Rules that override everything: never merge; never push main; every PR targets dev with `--base dev`; a human applies migrations; commits carry no Co-Authored-By or session trailers; stop at the two gates below.
 
 ## Phase A — Preflight and recon (READ-ONLY, no edits, no branch yet)
 1. `git status` must be clean and on `dev`; then `git pull`. If not clean, stop and report.
@@ -27,8 +27,8 @@ Rules that override everything: never merge; never push main; every PR targets d
 10. Fix every CONFIRMED finding. Note UNCERTAIN and REFUTED without acting. Re-run `gate.sh`. If a CONFIRMED critical/high remains after round 2, stop and report.
 
 ## Phase D — PR, then STOP
-11. Fill `.github/pull_request_template.md` completely. Review artifacts are mandatory: verbatim schemas and guards, query audit tables, acceptance evidence, the reviewers' tables (found / fixed / deferred), deliberate deviations with reasons, migration sequencing, and a "Human must do" list.
+11. Write the PR body with .github/pull_request_template.md: Summary (2–4 sentences, what and why), Changes (3–8 bullets describing behaviour, not file lists), Testing (what was verified, one line each), Notes only for migrations, configuration or known limitations. No reviewer tables, verbatim code, diffs, "Human must do" lists, or mentions of AI, agents or sessions.
 12. `git push -u origin <branch>` then `gh pr create --base dev --title "<type>: <summary>" --body-file <tmpfile>`.
-13. `rm -f .claude/.ship-active`. Print the PR URL and the "Human must do" list. **STOP. Do not merge.**
+13. `rm -f .claude/.ship-active`. Print in the session (not the PR): the PR URL, review artifacts, reviewer table (found/fixed/deferred), deliberate deviations, migration sequencing, and the "Human must do" checklist. **STOP. Do not merge.**
 
 If you must pause for a human decision during B or C: `rm -f .claude/.ship-active`, ask, and `touch` it again when resuming.

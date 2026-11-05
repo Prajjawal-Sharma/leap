@@ -2,8 +2,9 @@ import { NextResponse, type NextRequest } from "next/server";
 
 import { callGemini, GeminiError } from "@/lib/ai/gemini-client";
 import {
+  hasTailorableContent,
   ParsedResumeSchema,
-  TailoredResumeSchema,
+  tailoredResumeSchemaFor,
   type ParsedResume,
   type TailoredResume,
 } from "@/lib/ai/schemas";
@@ -184,6 +185,19 @@ export async function POST(request: NextRequest) {
   }
   const original = originalValidated.data;
 
+  // Checked before the job lookup and the Gemini call: with nothing to
+  // rewrite, a faithful reply can only fail TailoredResumeSchema's refine,
+  // and every retry would spend a free-tier request (20/day/key) on a 502.
+  if (!hasTailorableContent(original)) {
+    return NextResponse.json(
+      {
+        error:
+          "Tailoring needs a summary, work experience or skills on your resume — upload a version that includes one.",
+      },
+      { status: 409 }
+    );
+  }
+
   const { data: job, error: jobErr } = await supabase
     .from("jobs")
     .select("id, title, company, description, requirements")
@@ -216,7 +230,10 @@ export async function POST(request: NextRequest) {
       { temperature: 0.4, model: TAILOR_MODEL }
     );
     const rawJson: unknown = JSON.parse(stripFences(raw));
-    const validated = TailoredResumeSchema.safeParse(rawJson);
+    // Per-request schema: rejects dropped, invented or blanked entries and a
+    // blanked summary, and restores contact fields from the original (see
+    // schemas.ts).
+    const validated = tailoredResumeSchemaFor(original).safeParse(rawJson);
     if (!validated.success) {
       // Persist nothing — the client can simply retry.
       console.error(
@@ -225,7 +242,8 @@ export async function POST(request: NextRequest) {
       );
       return NextResponse.json(
         {
-          error: "Gemini returned a malformed tailored resume payload",
+          // Shown verbatim on the job card; the zod detail is in the log.
+          error: "The tailored resume came back incomplete. Try again.",
           retryable: true,
         },
         { status: 502 }
@@ -240,9 +258,14 @@ export async function POST(request: NextRequest) {
         { status }
       );
     }
+    // A SyntaxError is malformed model output, which a resample fixes —
+    // retryable per the Definition of Done. Anything else here is a bug.
     const message = err instanceof Error ? err.message : "Unknown error";
     return NextResponse.json(
-      { error: `Failed to parse Gemini response: ${message}`, retryable: false },
+      {
+        error: `Failed to parse Gemini response: ${message}`,
+        retryable: err instanceof SyntaxError,
+      },
       { status: 502 }
     );
   }

@@ -8,10 +8,12 @@ import { describe, it } from "node:test";
 import type { z } from "zod";
 
 import {
+  hasTailorableContent,
   ParsedResumeSchema,
   ResumeParseAndScoreSchema,
   ResumeScoreAnalysisSchema,
   TailoredResumeSchema,
+  tailoredResumeSchemaFor,
 } from "./schemas";
 
 // Shaped like a real parse of a mid-level engineer's CV: every field present,
@@ -49,6 +51,25 @@ const fullResume = {
   skills: ["Go", "Java", "Kafka", "PostgreSQL", "Kubernetes", "gRPC"],
   certifications: ["AWS Certified Developer – Associate"],
   languages: ["English", "Hindi"],
+};
+
+// A sparse-but-real fresher CV (Pitfall 3) in the prompt's shape: every key
+// present, "" and [] for what the resume does not have. Shared so the parse
+// test that must accept it and the tailor pre-check that must refuse it are
+// talking about the same CV.
+const fresherResume = {
+  full_name: "Meera Iyer",
+  email: "meera@example.com",
+  phone: "",
+  location: "",
+  summary: "",
+  experience: [],
+  education: [
+    { institution: "Anna University", degree: "B.Sc", year: "2026" },
+  ],
+  skills: [],
+  certifications: ["Google Data Analytics Certificate"],
+  languages: [],
 };
 
 // Shaped like a real ATS analysis. One keywords_missing entry is a full
@@ -171,24 +192,10 @@ describe("ResumeParseAndScoreSchema", () => {
   });
 
   // Pitfall 3: a fresher's CV with no summary, experience or skills is real
-  // data and must not take the 502 path. Shaped the way the prompt asks for
-  // it: every key present, "" and [] for what the resume does not have.
+  // data and must not take the 502 path.
   it("accepts a sparse-but-real fresher CV in the prompt's shape", () => {
     const r = ResumeParseAndScoreSchema.safeParse({
-      resume: {
-        full_name: "Meera Iyer",
-        email: "meera@example.com",
-        phone: "",
-        location: "",
-        summary: "",
-        experience: [],
-        education: [
-          { institution: "Anna University", degree: "B.Sc", year: "2026" },
-        ],
-        skills: [],
-        certifications: ["Google Data Analytics Certificate"],
-        languages: [],
-      },
+      resume: fresherResume,
       ats_analysis: {
         score: 41,
         strengths: ["Relevant certification for analyst roles"],
@@ -246,6 +253,16 @@ describe("ResumeParseAndScoreSchema", () => {
     });
     assertSingleIssue(r, ["ats_analysis", "score"], "invalid_type");
   });
+
+  // A real resume does not rescue an empty analysis: with score defaulted,
+  // this persisted a Gemini score of 0 and halved the stored ats_score.
+  it("rejects a real resume with an empty analysis", () => {
+    const r = ResumeParseAndScoreSchema.safeParse({
+      resume: fullResume,
+      ats_analysis: {},
+    });
+    assertSingleIssue(r, ["ats_analysis", "score"], "invalid_type");
+  });
 });
 
 // The standalone /api/resume/score site validates against this directly.
@@ -261,6 +278,23 @@ describe("ResumeScoreAnalysisSchema", () => {
       strengths: Array.from({ length: 21 }, () => "Clear impact"),
     });
     assertSingleIssue(r, ["strengths"], "too_big");
+  });
+
+  // An empty object and a refusal (which strips to {}) used to parse as a
+  // successful analysis scoring 0 and overwrite the stored ats_score.
+  it("rejects a reply with no score: empty object and refusal", () => {
+    for (const reply of [{}, { error: "I can't help with that request." }]) {
+      const r = ResumeScoreAnalysisSchema.safeParse(reply);
+      assertSingleIssue(r, ["score"], "invalid_type");
+    }
+  });
+
+  // Only the score is required: a thin resume can get a score with no
+  // findings and no verdict, and that must not 502.
+  it("accepts a score with no findings or verdict", () => {
+    const r = ResumeScoreAnalysisSchema.safeParse({ score: 35 });
+    assert.equal(r.success, true);
+    assert.equal(r.success && r.data.verdict, "");
   });
 });
 
@@ -303,6 +337,14 @@ describe("TailoredResumeSchema", () => {
     }
   });
 
+  it("rejects a reply whose only content is a blank skill", () => {
+    const r = TailoredResumeSchema.safeParse({
+      full_name: "Asha Verma",
+      skills: ["  "],
+    });
+    assertSingleIssue(r, [], "custom");
+  });
+
   it("accepts a summary exactly at the 2000-char cap", () => {
     const r = TailoredResumeSchema.safeParse({
       ...fullResume,
@@ -317,5 +359,263 @@ describe("TailoredResumeSchema", () => {
       summary: repeat(2001),
     });
     assertSingleIssue(r, ["summary"], "too_big");
+  });
+});
+
+describe("hasTailorableContent", () => {
+  it("is false for the sparse fresher CV, so tailoring 409s before Gemini", () => {
+    assert.equal(
+      hasTailorableContent(ParsedResumeSchema.parse(fresherResume)),
+      false
+    );
+  });
+
+  it("treats a whitespace-only summary as empty", () => {
+    assert.equal(
+      hasTailorableContent(
+        ParsedResumeSchema.parse({ ...fresherResume, summary: "  \n " })
+      ),
+      false
+    );
+  });
+
+  // Every entry field defaults to "", so a degenerate parse can carry
+  // entries with no text. Those must not get past the pre-check.
+  it("treats blank entries and zero-width text as empty", () => {
+    for (const extra of [
+      { skills: [""] },
+      { skills: ["  "] },
+      { experience: [{}] },
+      { summary: "\u200b" },
+    ]) {
+      const r = ParsedResumeSchema.parse({ ...fresherResume, ...extra });
+      assert.equal(hasTailorableContent(r), false, JSON.stringify(extra));
+    }
+  });
+
+  it("is true when any one of summary, experience or skills is present", () => {
+    for (const extra of [
+      { summary: "Analytics graduate." },
+      { experience: [fullResume.experience[0]] },
+      { skills: ["SQL"] },
+    ]) {
+      const r = ParsedResumeSchema.parse({ ...fresherResume, ...extra });
+      assert.equal(hasTailorableContent(r), true, JSON.stringify(extra));
+    }
+  });
+
+  it("counts an entry with any one field filled, and one real skill", () => {
+    for (const extra of [
+      { experience: [{ description: "Built weekly sales dashboards." }] },
+      { experience: [{ duration: "Jun 2025 – Aug 2025" }] },
+      { skills: ["", "SQL"] },
+    ]) {
+      const r = ParsedResumeSchema.parse({ ...fresherResume, ...extra });
+      assert.equal(hasTailorableContent(r), true, JSON.stringify(extra));
+    }
+  });
+});
+
+describe("tailoredResumeSchemaFor", () => {
+  const original = ParsedResumeSchema.parse(fullResume);
+  const schema = tailoredResumeSchemaFor(original);
+  const rewrite = {
+    ...fullResume,
+    summary:
+      "Backend engineer focused on payment reliability, with five years of Go and Kafka in high-throughput ledgers.",
+  };
+
+  it("accepts a faithful rewrite, including dropped skills", () => {
+    const r = schema.safeParse({ ...rewrite, skills: ["Go", "Kafka"] });
+    assert.equal(r.success, true);
+    assert.deepEqual(r.success && r.data.skills, ["Go", "Kafka"]);
+  });
+
+  it("restores contact fields the reply blanked, omitted or altered", () => {
+    const reply: Record<string, unknown> = {
+      ...rewrite,
+      full_name: "",
+      phone: "+91-98765-43210",
+      location: "Bangalore",
+    };
+    delete reply.email;
+    const r = schema.safeParse(reply);
+    assert.equal(r.success, true);
+    if (!r.success) return;
+    assert.equal(r.data.full_name, original.full_name);
+    assert.equal(r.data.email, original.email);
+    assert.equal(r.data.phone, original.phone);
+    assert.equal(r.data.location, original.location);
+    assert.equal(r.data.summary, rewrite.summary);
+  });
+
+  it("never lets the reply fill a contact field the original lacks", () => {
+    const sparseOriginal = ParsedResumeSchema.parse({
+      ...fullResume,
+      phone: "",
+    });
+    const r = tailoredResumeSchemaFor(sparseOriginal).safeParse({
+      ...rewrite,
+      phone: "+91 90000 00000",
+    });
+    assert.equal(r.success, true);
+    assert.equal(r.success && r.data.phone, "");
+  });
+
+  // A dropped or invented entry in any count-preserved list fails on that
+  // list alone. An omitted key defaults to [] and counts as dropping all.
+  const listCases = [
+    ["experience", fullResume.experience.slice(1)],
+    ["experience", [...fullResume.experience, fullResume.experience[0]]],
+    ["education", []],
+    ["education", [...fullResume.education, fullResume.education[0]]],
+    ["certifications", []],
+    ["certifications", [...fullResume.certifications, "CKA"]],
+    ["languages", ["English"]],
+    ["languages", [...fullResume.languages, "Kannada"]],
+  ] as const;
+
+  for (const [key, entries] of listCases) {
+    it(`rejects ${key} with ${entries.length} entries (original has ${original[key].length})`, () => {
+      const r = schema.safeParse({ ...rewrite, [key]: entries });
+      assertSingleIssue(r, [key], "custom");
+    });
+  }
+
+  // Same counts, blanked entries: every entry field defaults to "", so a
+  // count check alone saved these as the tailored resume.
+  const blankedCases = [
+    [
+      "experience rows that keep only the description",
+      "experience",
+      fullResume.experience.map((e) => ({ description: e.description })),
+    ],
+    ["an empty education row", "education", [{}]],
+    ["a blank certification", "certifications", [""]],
+    ["a blank language", "languages", ["English", " "]],
+  ] as const;
+
+  for (const [label, key, entries] of blankedCases) {
+    it(`rejects ${label}`, () => {
+      const r = schema.safeParse({ ...rewrite, [key]: entries });
+      assertSingleIssue(r, [key], "custom");
+    });
+  }
+
+  // Every field is pinned, so dropping one from the per-field check fails.
+  for (const field of ["company", "role", "duration", "description"] as const) {
+    it(`rejects a blanked experience ${field}`, () => {
+      const r = schema.safeParse({
+        ...rewrite,
+        experience: [
+          { ...fullResume.experience[0], [field]: "" },
+          fullResume.experience[1],
+        ],
+      });
+      assertSingleIssue(r, ["experience"], "custom");
+    });
+  }
+
+  for (const field of ["institution", "degree", "year"] as const) {
+    it(`rejects a blanked education ${field}`, () => {
+      const r = schema.safeParse({
+        ...rewrite,
+        education: [{ ...fullResume.education[0], [field]: " " }],
+      });
+      assertSingleIssue(r, ["education"], "custom");
+    });
+  }
+
+  it("rejects a reply that blanks or omits the original's summary", () => {
+    const omitted: Record<string, unknown> = { ...rewrite };
+    delete omitted.summary;
+    for (const reply of [{ ...rewrite, summary: " " }, omitted]) {
+      assertSingleIssue(schema.safeParse(reply), ["summary"], "custom");
+    }
+  });
+
+  it("accepts no summary when the original has none", () => {
+    const noSummary = ParsedResumeSchema.parse({ ...fullResume, summary: "" });
+    const r = tailoredResumeSchemaFor(noSummary).safeParse({
+      ...fullResume,
+      summary: "",
+    });
+    assert.equal(r.success, true);
+  });
+
+  it("rejects an all-blank reply that keeps every count", () => {
+    const r = schema.safeParse({
+      summary: "x",
+      experience: [{}, {}],
+      education: [{}],
+      certifications: [""],
+      languages: ["", ""],
+    });
+    assert.equal(r.success, false);
+  });
+
+  it("accepts reordered entries and a field the original left blank", () => {
+    const noYear = ParsedResumeSchema.parse({
+      ...fullResume,
+      education: [{ ...fullResume.education[0], year: "" }],
+    });
+    const r = tailoredResumeSchemaFor(noYear).safeParse({
+      ...rewrite,
+      experience: [...fullResume.experience].reverse(),
+      education: fullResume.education,
+    });
+    assert.equal(r.success, true);
+  });
+
+  // An entry-by-entry comparison would reject this: index 0 had a duration
+  // in the original and has none in the reply.
+  it("accepts reordered entries whose fill patterns differ", () => {
+    const noDuration = { ...fullResume.experience[1], duration: "" };
+    const mixed = ParsedResumeSchema.parse({
+      ...fullResume,
+      experience: [fullResume.experience[0], noDuration],
+    });
+    const r = tailoredResumeSchemaFor(mixed).safeParse({
+      ...rewrite,
+      experience: [noDuration, fullResume.experience[0]],
+    });
+    assert.equal(r.success, true);
+  });
+
+  // A blank entry is not data, so tidying it away must not 502 on every
+  // retry.
+  it("accepts a reply that drops an original's blank entries", () => {
+    const withBlanks = ParsedResumeSchema.parse({
+      ...fullResume,
+      experience: [...fullResume.experience, {}],
+      education: [...fullResume.education, {}],
+      certifications: [...fullResume.certifications, ""],
+      languages: [...fullResume.languages, " "],
+    });
+    const r = tailoredResumeSchemaFor(withBlanks).safeParse(rewrite);
+    assert.equal(r.success, true);
+  });
+
+  it("accepts an original's blank entry kept blank", () => {
+    const withBlank = ParsedResumeSchema.parse({
+      ...fullResume,
+      experience: [fullResume.experience[0], {}],
+    });
+    const r = tailoredResumeSchemaFor(withBlank).safeParse({
+      ...rewrite,
+      experience: [fullResume.experience[0], {}],
+    });
+    assert.equal(r.success, true);
+  });
+
+  it("rejects a reply that omits the education block entirely", () => {
+    const reply: Record<string, unknown> = { ...rewrite };
+    delete reply.education;
+    assertSingleIssue(schema.safeParse(reply), ["education"], "custom");
+  });
+
+  it("still rejects a refusal object", () => {
+    const r = schema.safeParse({ error: "I can't help with that request." });
+    assert.equal(r.success, false);
   });
 });

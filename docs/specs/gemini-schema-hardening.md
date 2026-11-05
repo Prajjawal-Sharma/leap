@@ -37,7 +37,7 @@ cannot succeed. These findings came from the schema-reviewer pass on the zod
 - F5 TRUE: `parse/route.ts:158`, `score/route.ts:137`, `tailor/route.ts:243`
   return 502 `retryable:false` on a non-Gemini error, which in practice is only
   a `JSON.parse` SyntaxError. Unreachable today: `callGemini`
-  (`gemini-client.ts:530`) parses with identical fence stripping first and
+  (`gemini-client.ts:537`) parses with identical fence stripping first and
   throws `GeminiError(502, retryable:true)`.
 - `src/lib/ai/schemas.test.ts` is on `dev` (#32) with fixtures and
   `assertSingleIssue`.

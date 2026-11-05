@@ -157,11 +157,27 @@ export type ResumeParseAndScore = z.infer<typeof ResumeParseAndScoreSchema>;
 //
 // The same predicate gates the tailor route BEFORE the Gemini call: an
 // original with no summary, experience or skills (a sparse-but-real fresher
-// CV the parse refine accepts) can only produce a reply this refine rejects,
-// so calling the model would spend a scarce free-tier request on a
-// guaranteed 502.
+// CV the parse refine accepts) gives the model nothing to rewrite. A
+// faithful reply — the prompt forbids inventing content — has none of the
+// three either and fails this refine, so calling the model would spend a
+// scarce free-tier request on a 502.
+//
+// Content means visible text, not entries: every entry field defaults to "",
+// so skills: [""] or experience: [{}] is as empty as [] — and trim() leaves
+// zero-width characters behind.
+const hasText = (s: string): boolean =>
+  s.replace(/[\u200b-\u200d]/g, "").trim().length > 0;
+
 export const hasTailorableContent = (r: ParsedResume): boolean =>
-  r.summary.trim().length > 0 || r.experience.length > 0 || r.skills.length > 0;
+  hasText(r.summary) ||
+  r.experience.some(
+    (e) =>
+      hasText(e.company) ||
+      hasText(e.role) ||
+      hasText(e.duration) ||
+      hasText(e.description)
+  ) ||
+  r.skills.some(hasText);
 
 export const TailoredResumeSchema = ParsedResumeSchema.refine(
   hasTailorableContent,
@@ -185,22 +201,65 @@ const COUNT_PRESERVED_LISTS = [
   "languages",
 ] as const;
 
+type CountPreservedList = (typeof COUNT_PRESERVED_LISTS)[number];
+
+// How many entries have each field filled in (visible text), per list. The
+// count check alone misses a reply that keeps the count but blanks the
+// entries — education: [{}] for a real degree, or experience rows that keep
+// only the description — because every entry field defaults to "". Counting
+// per field rather than comparing entry by entry leaves the model free to
+// reorder and to touch up wording.
+const filled = (values: string[]): number => values.filter(hasText).length;
+
+const filledCounts = (
+  r: ParsedResume
+): Record<CountPreservedList, Record<string, number>> => ({
+  experience: {
+    company: filled(r.experience.map((e) => e.company)),
+    role: filled(r.experience.map((e) => e.role)),
+    duration: filled(r.experience.map((e) => e.duration)),
+    description: filled(r.experience.map((e) => e.description)),
+  },
+  education: {
+    institution: filled(r.education.map((e) => e.institution)),
+    degree: filled(r.education.map((e) => e.degree)),
+    year: filled(r.education.map((e) => e.year)),
+  },
+  certifications: { name: filled(r.certifications) },
+  languages: { name: filled(r.languages) },
+});
+
 // Per-request tailor schema. TailoredResumeSchema alone cannot tell a
 // faithful rewrite from a partial one — every field defaults, so a reply
 // that omits the education block or the email still parses — and the
-// partial copy would be saved as the user's tailored resume. Count
-// mismatches fail validation (502-retryable, nothing written). Contact
-// fields are not checked but copied from the original: the prompt requires
-// them EXACTLY as given, so there is no legitimate reply in which they
-// differ, and restoring them costs nothing where a 502 would cost a retry.
-export const tailoredResumeSchemaFor = (original: ParsedResume) =>
-  TailoredResumeSchema.superRefine((r, ctx) => {
+// partial copy would be saved as the user's tailored resume. A changed
+// count, or a field filled in fewer entries than the original, fails
+// validation (502-retryable, nothing written); filling a field the original
+// left blank does not. Contact fields are not checked but copied from the
+// original: the prompt requires them EXACTLY as given, so there is no
+// legitimate reply in which they differ, and restoring them costs nothing
+// where a 502 would cost a retry.
+export const tailoredResumeSchemaFor = (original: ParsedResume) => {
+  const originalFilled = filledCounts(original);
+  return TailoredResumeSchema.superRefine((r, ctx) => {
+    const replyFilled = filledCounts(r);
     for (const key of COUNT_PRESERVED_LISTS) {
       if (r[key].length !== original[key].length) {
         ctx.addIssue({
           code: "custom",
           path: [key],
           message: `tailored ${key} has ${r[key].length} entries; the original has ${original[key].length}`,
+        });
+        continue;
+      }
+      const blanked = Object.keys(originalFilled[key]).filter(
+        (field) => replyFilled[key][field] < originalFilled[key][field]
+      );
+      if (blanked.length > 0) {
+        ctx.addIssue({
+          code: "custom",
+          path: [key],
+          message: `tailored ${key} blanks ${blanked.join(", ")} in entries the original filled`,
         });
       }
     }
@@ -213,3 +272,4 @@ export const tailoredResumeSchemaFor = (original: ParsedResume) =>
       location: original.location,
     })
   );
+};

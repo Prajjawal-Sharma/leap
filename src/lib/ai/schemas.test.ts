@@ -337,6 +337,14 @@ describe("TailoredResumeSchema", () => {
     }
   });
 
+  it("rejects a reply whose only content is a blank skill", () => {
+    const r = TailoredResumeSchema.safeParse({
+      full_name: "Asha Verma",
+      skills: ["  "],
+    });
+    assertSingleIssue(r, [], "custom");
+  });
+
   it("accepts a summary exactly at the 2000-char cap", () => {
     const r = TailoredResumeSchema.safeParse({
       ...fullResume,
@@ -369,6 +377,20 @@ describe("hasTailorableContent", () => {
       ),
       false
     );
+  });
+
+  // Every entry field defaults to "", so a degenerate parse can carry
+  // entries with no text. Those must not get past the pre-check.
+  it("treats blank entries and zero-width text as empty", () => {
+    for (const extra of [
+      { skills: [""] },
+      { skills: ["  "] },
+      { experience: [{}] },
+      { summary: "\u200b" },
+    ]) {
+      const r = ParsedResumeSchema.parse({ ...fresherResume, ...extra });
+      assert.equal(hasTailorableContent(r), false, JSON.stringify(extra));
+    }
   });
 
   it("is true when any one of summary, experience or skills is present", () => {
@@ -448,6 +470,67 @@ describe("tailoredResumeSchemaFor", () => {
       assertSingleIssue(r, [key], "custom");
     });
   }
+
+  // Same counts, blanked entries: every entry field defaults to "", so a
+  // count check alone saved these as the tailored resume.
+  const blankedCases = [
+    [
+      "experience rows that keep only the description",
+      "experience",
+      fullResume.experience.map((e) => ({ description: e.description })),
+    ],
+    [
+      "one blanked company",
+      "experience",
+      [{ ...fullResume.experience[0], company: "" }, fullResume.experience[1]],
+    ],
+    ["an empty education row", "education", [{}]],
+    ["a blank certification", "certifications", [""]],
+    ["a blank language", "languages", ["English", " "]],
+  ] as const;
+
+  for (const [label, key, entries] of blankedCases) {
+    it(`rejects ${label}`, () => {
+      const r = schema.safeParse({ ...rewrite, [key]: entries });
+      assertSingleIssue(r, [key], "custom");
+    });
+  }
+
+  it("rejects an all-blank reply that keeps every count", () => {
+    const r = schema.safeParse({
+      summary: "x",
+      experience: [{}, {}],
+      education: [{}],
+      certifications: [""],
+      languages: ["", ""],
+    });
+    assert.equal(r.success, false);
+  });
+
+  it("accepts reordered entries and a field the original left blank", () => {
+    const noYear = ParsedResumeSchema.parse({
+      ...fullResume,
+      education: [{ ...fullResume.education[0], year: "" }],
+    });
+    const r = tailoredResumeSchemaFor(noYear).safeParse({
+      ...rewrite,
+      experience: [...fullResume.experience].reverse(),
+      education: fullResume.education,
+    });
+    assert.equal(r.success, true);
+  });
+
+  it("accepts an original's blank entry kept blank", () => {
+    const withBlank = ParsedResumeSchema.parse({
+      ...fullResume,
+      experience: [fullResume.experience[0], {}],
+    });
+    const r = tailoredResumeSchemaFor(withBlank).safeParse({
+      ...rewrite,
+      experience: [fullResume.experience[0], {}],
+    });
+    assert.equal(r.success, true);
+  });
 
   it("rejects a reply that omits the education block entirely", () => {
     const reply: Record<string, unknown> = { ...rewrite };

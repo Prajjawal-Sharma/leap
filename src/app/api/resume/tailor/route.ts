@@ -241,7 +241,8 @@ export async function POST(request: NextRequest) {
       );
       return NextResponse.json(
         {
-          error: "Gemini returned a malformed tailored resume payload",
+          // Shown verbatim on the job card; the zod detail is in the log.
+          error: "The tailored resume came back incomplete. Try again.",
           retryable: true,
         },
         { status: 502 }

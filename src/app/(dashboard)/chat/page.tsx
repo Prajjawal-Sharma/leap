@@ -39,7 +39,10 @@ export default async function ChatPage() {
   const initialMessages = await fetchHistory();
 
   return (
-    <section className="flex flex-col h-[calc(100vh-8rem)] md:h-[calc(100vh-6rem)]">
+    // Fills the viewport inside the shell: on phones minus the top bar (56),
+    // main's top padding (24) and the tab-bar clearance (104) plus both safe
+    // areas; from md up minus main's vertical padding (32 + 40). dvh, never vh.
+    <section className="flex flex-col h-[calc(100dvh-184px-env(safe-area-inset-top)-env(safe-area-inset-bottom))] md:h-[calc(100dvh-72px)]">
       <header className="flex flex-col gap-1 pb-4 border-b border-white/[0.06]">
         <div className="flex items-center gap-2">
           <h1 className="text-2xl md:text-3xl font-semibold tracking-tight">

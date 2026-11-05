@@ -31,6 +31,7 @@ const SIDEBAR_KEYBOARD_SHORTCUT = "b"
 // Same boundaries as the sidebar-collapsed variant in globals.css, in the
 // same range syntax, so CSS and JS agree even at fractional widths.
 const TABLET_QUERY = "(width >= 48rem) and (width < 64rem)"
+const DESKTOP_QUERY = "(width >= 48rem)"
 
 type SidebarContextProps = {
   /** What is on screen now. */
@@ -108,9 +109,14 @@ function SidebarProvider({
   }, [open, setOpen])
 
   // ⌘/Ctrl+B — the component's own shortcut, the only global key handler.
+  // Held keys auto-repeat (one toggle per press, not a flapping sidebar), IME
+  // composition is left alone, and below md there is no sidebar to toggle.
   React.useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (
+        !event.repeat &&
+        !event.isComposing &&
+        window.matchMedia(DESKTOP_QUERY).matches &&
         event.key.toLowerCase() === SIDEBAR_KEYBOARD_SHORTCUT &&
         (event.metaKey || event.ctrlKey) &&
         !event.altKey &&
@@ -306,9 +312,11 @@ function SidebarContent({ className, ...props }: React.ComponentProps<"div">) {
       data-slot="sidebar-content"
       data-sidebar="content"
       className={cn(
-        // Collapsed, the rail's items always fit; overflow stays visible so
-        // the rail tooltips can sit outside the panel.
-        "no-scrollbar flex min-h-0 flex-1 flex-col gap-0 overflow-x-hidden overflow-y-auto sidebar-collapsed:overflow-visible",
+        // Collapsed on a viewport tall enough for every rail item, overflow is
+        // visible so the rail tooltips can sit outside the panel. Below 32rem
+        // (landscape phones) the rail scrolls instead — otherwise its items
+        // would spill over the account button in the footer.
+        "no-scrollbar flex min-h-0 flex-1 flex-col gap-0 overflow-x-hidden overflow-y-auto sidebar-collapsed:[@media(min-height:32rem)]:overflow-visible",
         className
       )}
       {...props}

@@ -17,10 +17,11 @@ const BODY = "Check your connection and try again. Your account is unaffected.";
 
 export default function AuthError({
   error,
-  reset,
+  retry,
 }: {
   error: Error & { digest?: string };
-  reset: () => void;
+  /** Re-fetches and re-renders the segment (Next 16); reset() would only re-render. */
+  retry: () => void;
 }) {
   useEffect(() => {
     console.error("[auth] render failed", error.digest ?? error.message);
@@ -35,7 +36,7 @@ export default function AuthError({
       <p className="max-w-[46ch] text-body-sm text-muted-foreground">{BODY}</p>
       <button
         type="button"
-        onClick={reset}
+        onClick={retry}
         className="mt-1 inline-flex h-11 items-center rounded-sm border border-border bg-card px-4 text-body-sm font-medium text-foreground outline-hidden hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring md:h-9"
       >
         Try again
@@ -48,7 +49,7 @@ export default function AuthError({
       <h1 className="sr-only">Something went wrong</h1>
       <ChunkBoundary fallback={plain}>
         <Suspense fallback={plain}>
-          <ErrorState title={TITLE} body={BODY} onRetry={reset} />
+          <ErrorState title={TITLE} body={BODY} onRetry={retry} />
         </Suspense>
       </ChunkBoundary>
     </main>

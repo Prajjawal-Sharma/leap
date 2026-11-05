@@ -13,11 +13,15 @@ import { FORCED_THEME } from "@/lib/theme/config";
 // it ships with every route, so it must not pull in the component kit.
 export default function GlobalError({
   error,
-  reset,
+  retry,
 }: {
   error: Error & { digest?: string };
-  reset: () => void;
+  retry: () => void;
 }) {
+  // A chunk that failed to load stays failed for this page's lifetime (React
+  // caches the rejected lazy load), so only a full reload can recover it.
+  const chunkFailed =
+    error?.name === "ChunkLoadError" || /load(ing)? chunk/i.test(error?.message ?? "");
   useEffect(() => {
     console.error("[app] root layout failed", error.digest ?? error.message);
   }, [error]);
@@ -40,7 +44,7 @@ export default function GlobalError({
             </p>
             <button
               type="button"
-              onClick={reset}
+              onClick={() => (chunkFailed ? window.location.reload() : retry())}
               className="mt-1 inline-flex h-11 items-center rounded-sm border border-border bg-card px-4 text-body-sm font-medium text-foreground outline-hidden hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring md:h-9"
             >
               Try again

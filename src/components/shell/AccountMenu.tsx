@@ -14,9 +14,10 @@ const AccountMenuPanel = lazy(() => import("./AccountMenuPanel"));
 /**
  * The account menu, code-split: the popover and everything in it load as their
  * own chunk instead of on every dashboard page's first load. The server still
- * renders the real trigger, and React replays a click that lands before the
- * chunk arrives, so nothing is lost. The Suspense fallback is the same
- * trigger, non-interactive, for the moment before that.
+ * renders the real trigger, so nothing shifts when it hydrates; the chunk is
+ * requested as soon as hydration reaches it. A click in the moment before that
+ * is not replayed — the menu opens on the next one. The Suspense fallback is
+ * the same trigger, non-interactive.
  *
  * If the chunk cannot load at all, the rest of the dashboard keeps working and
  * the trigger becomes a reload button: a full reload fetches the chunk afresh,

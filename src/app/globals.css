@@ -33,6 +33,22 @@
   }
 }
 
+/* Collapsed sidebar (src/components/ui/sidebar.tsx). The provider's wrapper
+   carries data-sidebar-state: "expanded" | "collapsed" once the user has
+   chosen (remembered in the sidebar_state cookie), or "auto" before that.
+   Auto is collapsed on tablets (768–1023px, DESIGN §6.1) and expanded above,
+   decided by CSS so a collapsed sidebar never flashes open on first paint. */
+@custom-variant sidebar-collapsed {
+  &:where([data-sidebar-state="collapsed"] *) {
+    @slot;
+  }
+  @media (width >= 48rem) and (width < 64rem) {
+    &:where([data-sidebar-state="auto"] *) {
+      @slot;
+    }
+  }
+}
+
 /* ---------------------------------------------------------------------------
    Colour — docs/DESIGN.md §5.1. Hex exactly as the table gives it (the spec
    allows hex or a round-tripping OKLCH; hex removes the conversion risk).

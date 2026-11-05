@@ -6,7 +6,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 export default function DashboardLoading() {
   return (
     <div aria-busy="true" aria-live="polite" className="space-y-6">
-      <span className="sr-only">Loading</span>
+      <span className="sr-only">Loading…</span>
       <div className="space-y-2">
         <Skeleton className="h-8 w-40" />
         <Skeleton className="h-4 w-72 max-w-full" />

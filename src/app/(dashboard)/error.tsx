@@ -22,7 +22,7 @@ export default function DashboardError({
       <h1 className="sr-only">Something went wrong</h1>
       <ErrorState
         title="This page could not load"
-        body="Something went wrong on our side. Try again, or open another page from the menu."
+        body="Something went wrong while loading it. Try again, or open another page from the menu."
         onRetry={reset}
       />
     </div>

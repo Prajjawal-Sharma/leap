@@ -36,7 +36,7 @@ export default function GlobalError({
           >
             <h1 className="text-title-3 text-foreground">Leap could not load</h1>
             <p className="max-w-[46ch] text-body-sm text-muted-foreground">
-              Something went wrong on our side. Try again in a moment.
+              Something went wrong while loading it. Try again in a moment.
             </p>
             <button
               type="button"

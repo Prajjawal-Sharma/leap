@@ -28,7 +28,9 @@ import {
 const SIDEBAR_WIDTH = "16rem" // 256px
 const SIDEBAR_WIDTH_ICON = "3.5rem" // 56px
 const SIDEBAR_KEYBOARD_SHORTCUT = "b"
-const TABLET_QUERY = "(min-width: 768px) and (max-width: 1023px)"
+// Same boundaries as the sidebar-collapsed variant in globals.css, in the
+// same range syntax, so CSS and JS agree even at fractional widths.
+const TABLET_QUERY = "(width >= 48rem) and (width < 64rem)"
 
 type SidebarContextProps = {
   /** What is on screen now. */
@@ -36,6 +38,9 @@ type SidebarContextProps = {
   open: boolean
   setOpen: (open: boolean) => void
   toggleSidebar: () => void
+  /** No choice stored yet and not hydrated: the server cannot know `state`. */
+  stateUnknown: boolean
+  setTooltipsDismissed: (dismissed: boolean) => void
 }
 
 const SidebarContext = React.createContext<SidebarContextProps | null>(null)
@@ -48,6 +53,8 @@ function useSidebar() {
 
   return context
 }
+
+const subscribeNever = () => () => {}
 
 function subscribeTablet(callback: () => void) {
   const mql = window.matchMedia(TABLET_QUERY)
@@ -81,6 +88,14 @@ function SidebarProvider({
     () => false
   )
   const open = preference ?? !isTablet
+  const hydrated = React.useSyncExternalStore(
+    subscribeNever,
+    () => true,
+    () => false
+  )
+  // WCAG 1.4.13: rail tooltips can be dismissed with Escape without moving
+  // the pointer or focus. Cleared when focus moves or the pointer leaves.
+  const [tooltipsDismissed, setTooltipsDismissed] = React.useState(false)
 
   const setOpen = React.useCallback((value: boolean) => {
     setPreference(value)
@@ -112,18 +127,31 @@ function SidebarProvider({
 
   const state = open ? "expanded" : "collapsed"
 
+  const stateUnknown = preference === undefined && !hydrated
+
   const contextValue = React.useMemo<SidebarContextProps>(
-    () => ({ state, open, setOpen, toggleSidebar }),
-    [state, open, setOpen, toggleSidebar]
+    () => ({
+      state,
+      open,
+      setOpen,
+      toggleSidebar,
+      stateUnknown,
+      setTooltipsDismissed,
+    }),
+    [state, open, setOpen, toggleSidebar, stateUnknown]
   )
 
   return (
     <SidebarContext.Provider value={contextValue}>
+      {/* Deliberately no data-slot: this wrapper encloses every page's
+          content, and globals.css scopes the kit's reduced-motion and
+          border-colour rules to [data-slot] subtrees. */}
       <div
-        data-slot="sidebar-wrapper"
+        data-sidebar="wrapper"
         data-sidebar-state={
           preference === undefined ? "auto" : preference ? "expanded" : "collapsed"
         }
+        data-rail-tooltips={tooltipsDismissed ? "dismissed" : undefined}
         style={
           {
             "--sidebar-width": SIDEBAR_WIDTH,
@@ -145,7 +173,20 @@ function Sidebar({
   children,
   ...props
 }: React.ComponentProps<"div">) {
-  const { state } = useSidebar()
+  const { state, setTooltipsDismissed } = useSidebar()
+
+  // Escape dismisses a rail tooltip shown by hover too, so it is listened for
+  // while the pointer is over the sidebar — scoped, not a global shortcut.
+  const onEscape = React.useCallback(
+    (event: KeyboardEvent) => {
+      if (event.key === "Escape") setTooltipsDismissed(true)
+    },
+    [setTooltipsDismissed]
+  )
+  React.useEffect(
+    () => () => window.removeEventListener("keydown", onEscape),
+    [onEscape]
+  )
 
   // Hidden below md: phones get the bottom tab bar instead (DESIGN §6.2).
   return (
@@ -161,12 +202,23 @@ function Sidebar({
         data-slot="sidebar-gap"
         className="relative w-[calc(var(--sidebar-width)+--spacing(4))] shrink-0 bg-transparent transition-[width] duration-(--dur-3) ease-out sidebar-collapsed:w-[calc(var(--sidebar-width-icon)+--spacing(4))]"
       />
+      {/* left: the landscape notch (viewport-fit=cover); body padding covers
+          in-flow content, this fixed panel needs it explicitly. */}
       <div
         data-slot="sidebar-container"
         className={cn(
-          "fixed inset-y-0 left-0 z-20 flex h-dvh w-[calc(var(--sidebar-width)+--spacing(4))] p-2 transition-[width] duration-(--dur-3) ease-out sidebar-collapsed:w-[calc(var(--sidebar-width-icon)+--spacing(4))]",
+          "fixed inset-y-0 left-[env(safe-area-inset-left)] z-20 flex h-dvh w-[calc(var(--sidebar-width)+--spacing(4))] p-2 transition-[width] duration-(--dur-3) ease-out sidebar-collapsed:w-[calc(var(--sidebar-width-icon)+--spacing(4))]",
           className
         )}
+        onPointerEnter={() => window.addEventListener("keydown", onEscape)}
+        onPointerLeave={() => {
+          window.removeEventListener("keydown", onEscape)
+          setTooltipsDismissed(false)
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "Escape") setTooltipsDismissed(true)
+        }}
+        onFocus={() => setTooltipsDismissed(false)}
         {...props}
       >
         <div
@@ -186,16 +238,20 @@ function SidebarTrigger({
   onClick,
   ...props
 }: React.ComponentProps<typeof Button>) {
-  const { toggleSidebar, open } = useSidebar()
+  const { toggleSidebar, open, stateUnknown } = useSidebar()
 
+  // Before hydration in auto mode the server cannot tell whether CSS shows
+  // the rail collapsed (tablet) or expanded, so it claims neither.
   return (
     <Button
       data-sidebar="trigger"
       data-slot="sidebar-trigger"
       variant="ghost"
       size="icon-sm"
-      aria-expanded={open}
-      aria-label={open ? "Collapse sidebar" : "Expand sidebar"}
+      aria-expanded={stateUnknown ? undefined : open}
+      aria-label={
+        stateUnknown ? "Toggle sidebar" : open ? "Collapse sidebar" : "Expand sidebar"
+      }
       className={cn("text-muted-foreground hover:text-foreground", className)}
       onClick={(event) => {
         onClick?.(event)
@@ -335,7 +391,7 @@ function SidebarMenuItem({ className, ...props }: React.ComponentProps<"li">) {
 // in the 56px rail. Labels fade rather than slide (motion tokens, §5.5) and
 // are clipped by the square's overflow.
 const sidebarMenuButtonVariants = cva(
-  "peer/menu-button group/menu-button flex h-10 w-full items-center gap-3 overflow-hidden rounded-lg px-3 text-left text-body-sm text-foreground outline-hidden transition-[background-color,color] duration-(--dur-1) ease-out hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring sidebar-collapsed:w-10 sidebar-collapsed:px-3 aria-disabled:pointer-events-none data-active:bg-brand-soft data-active:font-medium data-active:text-brand-text [&_svg]:size-[18px] [&_svg]:shrink-0 [&>span]:truncate [&>span]:transition-opacity [&>span]:duration-(--dur-1) sidebar-collapsed:[&>span]:opacity-0",
+  "peer/menu-button group/menu-button flex h-10 w-full pointer-coarse:h-11 items-center gap-3 overflow-hidden rounded-lg px-3 text-left text-body-sm text-foreground outline-hidden transition-[background-color,color] duration-(--dur-1) ease-out hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring sidebar-collapsed:w-10 sidebar-collapsed:px-3 aria-disabled:pointer-events-none data-active:bg-brand-soft data-active:font-medium data-active:text-brand-text [&_svg]:size-[18px] [&_svg]:shrink-0 [&>span]:truncate [&>span]:transition-opacity [&>span]:duration-(--dur-1) sidebar-collapsed:[&>span]:opacity-0",
   {
     variants: {
       variant: {
@@ -363,16 +419,23 @@ function SidebarRailTooltip({
   ...props
 }: React.ComponentProps<"span">) {
   return (
+    // The outer span bridges the gap to the rail (padding, not margin) so the
+    // pointer can move onto the label without it disappearing (WCAG 1.4.13);
+    // it only takes pointer events while shown. The label is opaque rather
+    // than glass: inside the sidebar's own backdrop-filter it could not blur
+    // what lies outside the panel.
     <span
       aria-hidden
       data-slot="sidebar-rail-tooltip"
       className={cn(
-        "pointer-events-none absolute top-1/2 left-full z-30 ml-3 hidden -translate-y-1/2 rounded-xl px-3 py-1.5 text-caption whitespace-nowrap text-foreground opacity-0 transition-opacity duration-(--dur-1) ease-out glass sidebar-collapsed:block group-hover/menu-item:opacity-100 group-has-[:focus-visible]/menu-item:opacity-100",
+        "pointer-events-none absolute top-1/2 left-full z-30 hidden -translate-y-1/2 pl-3 opacity-0 transition-opacity duration-(--dur-1) ease-out sidebar-collapsed:block group-hover/menu-item:pointer-events-auto group-hover/menu-item:opacity-100 group-has-[:focus-visible]/menu-item:opacity-100 group-data-[rail-tooltips=dismissed]/sidebar-wrapper:hidden",
         className
       )}
       {...props}
     >
-      {children}
+      <span className="block rounded-xl border border-border bg-popover px-3 py-1.5 text-caption whitespace-nowrap text-popover-foreground shadow-lg">
+        {children}
+      </span>
     </span>
   )
 }

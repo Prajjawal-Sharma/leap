@@ -63,9 +63,12 @@ function InsightsSoon() {
   // assistive tech why it is inert.
   return (
     <SidebarMenuItem>
+      {/* role=link so assistive tech hears "link, unavailable" rather than
+          bare text; still not focusable and has no href. */}
       <div
+        role="link"
         aria-disabled="true"
-        className="flex h-10 w-full items-center gap-3 overflow-hidden rounded-lg px-3 text-body-sm text-faint sidebar-collapsed:w-10 [&_svg]:size-[18px] [&_svg]:shrink-0"
+        className="flex h-10 w-full items-center gap-3 overflow-hidden rounded-lg px-3 text-body-sm text-faint pointer-coarse:h-11 sidebar-collapsed:w-10 [&_svg]:size-[18px] [&_svg]:shrink-0"
       >
         <Icon aria-hidden />
         <span className="flex-1 truncate transition-opacity duration-(--dur-1) sidebar-collapsed:opacity-0">
@@ -82,7 +85,7 @@ function InsightsSoon() {
 
 export function AppSidebar({ activeApplications, account }: Props) {
   return (
-    <Sidebar aria-label="Main">
+    <Sidebar>
       <SidebarHeader className="flex-row items-center gap-2 p-3 sidebar-collapsed:flex-col sidebar-collapsed:px-2">
         <Link
           href="/jobs"
@@ -90,14 +93,17 @@ export function AppSidebar({ activeApplications, account }: Props) {
           className="flex min-w-0 flex-1 items-center gap-2.5 rounded-lg outline-hidden focus-visible:ring-2 focus-visible:ring-ring sidebar-collapsed:flex-none"
         >
           <LeapMark />
-          <span className="truncate text-title-3 transition-opacity duration-(--dur-1) sidebar-collapsed:hidden">
+          <span translate="no" className="truncate text-title-3 sidebar-collapsed:hidden">
             Leap
           </span>
         </Link>
         <SidebarTrigger />
       </SidebarHeader>
 
+      {/* The desktop navigation landmark; the mobile tab bar is the other one,
+          and only one of the two is ever displayed. */}
       <SidebarContent>
+        <nav aria-label="Main">
         <SidebarGroup>
           <SidebarGroupContent>
             <SidebarMenu>
@@ -122,6 +128,7 @@ export function AppSidebar({ activeApplications, account }: Props) {
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
+        </nav>
       </SidebarContent>
 
       <SidebarFooter>

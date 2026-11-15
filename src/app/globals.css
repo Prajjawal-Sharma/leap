@@ -506,3 +506,26 @@
     text-wrap: pretty;
   }
 }
+
+/* iOS Safari zooms the page when a focused field's text is under 16px
+   (DESIGN §9.1). Phones only; desktop keeps each field's own size.
+   Deliberately unlayered: unlayered styles beat every @layer, so this wins
+   over Tailwind's text-sm/text-body-sm utilities on legacy and kit fields. */
+@media (max-width: 767px) {
+  input:not(
+      [type="checkbox"],
+      [type="radio"],
+      [type="range"],
+      [type="color"],
+      [type="file"],
+      [type="button"],
+      [type="submit"],
+      [type="reset"],
+      [type="image"],
+      [type="hidden"]
+    ),
+  select,
+  textarea {
+    font-size: 16px;
+  }
+}

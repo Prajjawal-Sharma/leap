@@ -118,10 +118,16 @@ export default function ResumePage() {
   const inputRef = useRef<HTMLInputElement>(null);
   const scoreCardRef = useRef<HTMLDivElement>(null);
 
-  // Smoothly bring the score card into view once a fresh upload finishes.
+  // Smoothly bring the score card into view once a fresh upload finishes —
+  // only when "ready" follows upload/parse/score work in this visit. Loading
+  // an existing resume also lands on "ready", and that visit opens at the top.
+  const workedThisVisit = useRef(false);
   useEffect(() => {
-    if (phase === "ready" && scoreCardRef.current) {
-      scoreCardRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
+    if (phase === "uploading" || phase === "parsing" || phase === "scoring") {
+      workedThisVisit.current = true;
+    } else if (phase === "ready" && workedThisVisit.current) {
+      workedThisVisit.current = false;
+      scoreCardRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
     }
   }, [phase]);
 

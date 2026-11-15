@@ -63,6 +63,17 @@ function subscribeTablet(callback: () => void) {
   return () => mql.removeEventListener("change", callback)
 }
 
+/** Focus is somewhere typing happens: a form field or contenteditable. */
+function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false
+  return (
+    target.isContentEditable ||
+    target instanceof HTMLInputElement ||
+    target instanceof HTMLTextAreaElement ||
+    target instanceof HTMLSelectElement
+  )
+}
+
 function SidebarProvider({
   defaultOpen,
   className,
@@ -110,12 +121,14 @@ function SidebarProvider({
 
   // ⌘/Ctrl+B — the component's own shortcut, the only global key handler.
   // Held keys auto-repeat (one toggle per press, not a flapping sidebar), IME
-  // composition is left alone, and below md there is no sidebar to toggle.
+  // composition is left alone, below md there is no sidebar to toggle, and in
+  // a text field ⌘B belongs to the field (bold in rich editors, nothing else).
   React.useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (
         !event.repeat &&
         !event.isComposing &&
+        !isEditableTarget(event.target) &&
         window.matchMedia(DESKTOP_QUERY).matches &&
         event.key.toLowerCase() === SIDEBAR_KEYBOARD_SHORTCUT &&
         (event.metaKey || event.ctrlKey) &&

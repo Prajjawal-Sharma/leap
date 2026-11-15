@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 
 import { AccountMenu } from "./AccountMenu";
 import { LeapMark } from "./LeapMark";
+import { LinkPending } from "./LinkPending";
 import { TAB_NAV } from "./nav";
 
 type Account = { name: string; email: string | null; initials: string };
@@ -32,7 +33,7 @@ export function MobileTopBar({ account }: { account: Account }) {
 }
 
 /**
- * Phones: floating glass pill inset 12px, five tabs, icon over an 11px label.
+ * Phones: floating glass pill inset 12px (8px below 380px), five tabs, icon over an 11px label.
  * Labels on glass use --foreground (DESIGN §5.2): the active tab is marked by
  * the brand capsule, a brand icon and a semibold label, never by colour alone.
  */
@@ -41,9 +42,9 @@ export function MobileTabBar() {
   return (
     <nav
       aria-label="Main"
-      className="pointer-events-none fixed inset-x-0 bottom-0 z-30 touch-manipulation pr-[calc(env(safe-area-inset-right)+12px)] pb-[calc(env(safe-area-inset-bottom)+12px)] pl-[calc(env(safe-area-inset-left)+12px)] md:hidden"
+      className="pointer-events-none fixed inset-x-0 bottom-0 z-30 touch-manipulation pr-[calc(env(safe-area-inset-right)+8px)] pb-[calc(env(safe-area-inset-bottom)+12px)] pl-[calc(env(safe-area-inset-left)+8px)] min-[380px]:pr-[calc(env(safe-area-inset-right)+12px)] min-[380px]:pl-[calc(env(safe-area-inset-left)+12px)] md:hidden"
     >
-      <ul className="glass pointer-events-auto flex items-stretch gap-0.5 rounded-full p-1">
+      <ul className="glass pointer-events-auto flex items-stretch gap-0 rounded-full p-1">
         {TAB_NAV.map(({ href, label, icon: Icon }) => {
           const active = isActivePath(pathname, href);
           return (
@@ -52,17 +53,21 @@ export function MobileTabBar() {
                 href={href}
                 aria-current={active ? "page" : undefined}
                 className={cn(
-                  "flex min-h-14 flex-col items-center justify-center gap-0.5 rounded-full px-0.5 text-foreground outline-hidden transition-colors duration-(--dur-1) [-webkit-tap-highlight-color:transparent] focus-visible:ring-2 focus-visible:ring-ring",
-                  active ? "bg-tab-on" : "hover:bg-accent"
+                  // No side padding: at 360px each tab is ~65px and
+                  // "Applications" needs ~63px at 11px.
+                  "flex min-h-14 flex-col items-center justify-center gap-0.5 rounded-full text-foreground outline-hidden transition-colors duration-(--dur-1) [-webkit-tap-highlight-color:transparent] focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none",
+                  // Pending (clicked, server not answered yet): the capsule at once.
+                  active ? "bg-tab-on" : "hover:bg-accent has-[[data-link-pending]]:bg-tab-on"
                 )}
               >
+                <LinkPending />
                 <Icon
                   aria-hidden
                   className={cn("size-6", active && "text-brand-text")}
                 />
                 <span
                   className={cn(
-                    // "Applications" must fit at 375px: 11px with tight tracking.
+                    // "Applications" must fit from 360px: 11px, tight tracking.
                     "max-w-full truncate text-[11px] leading-[14px] tracking-tight",
                     active ? "font-semibold" : "font-medium"
                   )}

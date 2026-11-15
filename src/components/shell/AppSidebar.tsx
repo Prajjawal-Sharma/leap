@@ -23,6 +23,7 @@ import { isActivePath } from "@/lib/ui/account";
 
 import { AccountMenu } from "./AccountMenu";
 import { LeapMark } from "./LeapMark";
+import { LinkPending } from "./LinkPending";
 import { INSIGHTS_SOON, MAIN_NAV, PROFILE_NAV, type NavItem } from "./nav";
 
 type Props = {
@@ -38,12 +39,15 @@ function NavLink({ item, badge }: { item: NavItem; badge?: number }) {
     <SidebarMenuItem>
       <SidebarMenuButton
         isActive={active}
+        // Pending (clicked, server not answered yet): the active pill at once.
+        className="has-[[data-link-pending]]:bg-brand-soft has-[[data-link-pending]]:text-brand-text motion-reduce:transition-none"
         render={
           <Link href={item.href} aria-current={active ? "page" : undefined} />
         }
       >
         <Icon aria-hidden />
         <span>{item.label}</span>
+        <LinkPending />
       </SidebarMenuButton>
       {badge ? (
         <SidebarMenuBadge aria-label={`${badge} active applications`}>

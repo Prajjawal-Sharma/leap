@@ -1,22 +1,13 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
-import { safeNext } from "@/lib/auth/safe-next";
+import { decideRoute } from "@/lib/auth/route-guard";
 
-// /auth/reset-password is deliberately absent: this list bounces
-// authenticated users away, and a recovery-link user gains a session the
-// moment the code is exchanged — bouncing them would break the reset flow.
-const AUTH_ROUTES = ["/login", "/signup", "/forgot-password"];
-const DASHBOARD_PREFIXES = [
-  "/dashboard",
-  "/jobs",
-  "/resume",
-  "/applications",
-  "/chat",
-  "/insights",
-];
-
-export async function middleware(request: NextRequest) {
+// Next 16's `proxy` convention (formerly `middleware`). It runs on the Node.js
+// runtime, where middleware ran on Edge; nothing below depends on either —
+// @supabase/ssr only reads and writes cookies through the callbacks given
+// here. The route lists and the decision live in src/lib/auth/route-guard.ts.
+export async function proxy(request: NextRequest) {
   let response = NextResponse.next({ request });
 
   const supabase = createServerClient(
@@ -41,22 +32,18 @@ export async function middleware(request: NextRequest) {
   } = await supabase.auth.getUser();
 
   const { pathname, searchParams } = request.nextUrl;
-  const isAuthRoute = AUTH_ROUTES.some((p) => pathname.startsWith(p));
-  const isDashboardRoute = DASHBOARD_PREFIXES.some((p) => pathname.startsWith(p));
+  const decision = decideRoute(pathname, searchParams.get("next"), Boolean(user));
 
-  if (!user && isDashboardRoute) {
+  if (decision.action === "to-login") {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
-    url.searchParams.set("next", pathname);
+    url.searchParams.set("next", decision.next);
     return NextResponse.redirect(url);
   }
 
-  if (user && isAuthRoute) {
+  if (decision.action === "to-app") {
     const url = request.nextUrl.clone();
-    // Setting .pathname alone can't change the host, but route ?next=
-    // through the shared guard anyway: one rule for every read site, and it
-    // also blocks attacker-forced internal paths like "/\evil.com".
-    url.pathname = safeNext(searchParams.get("next"));
+    url.pathname = decision.pathname;
     url.search = "";
     return NextResponse.redirect(url);
   }

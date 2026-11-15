@@ -41,9 +41,7 @@ Production: https://leap-five-delta.vercel.app
   proposing a third cron.
 - Not installed, despite earlier notes claiming otherwise: Resend, Sentry,
   Vercel Analytics. Do not import or reference them as if they exist.
-- `src/middleware.ts` still uses the deprecated Next.js `middleware.ts`
-  convention; the rename to `proxy.ts` is tracked as its own change
-  (`chore/middleware-to-proxy`), not something to fold into an unrelated PR.
+- Request gating is `src/proxy.ts` (Next 16 `proxy` convention, Node.js runtime); its route decision is the pure `src/lib/auth/route-guard.ts`.
 
 ## Design system
 docs/DESIGN.md is the source of truth for tokens, components, motion, layout
@@ -99,7 +97,7 @@ the daily pool on every cold start, so leave it unset there.
 - Every `resumes` read that expects a primary/uploaded resume filters `kind='uploaded'`; only the upload promote step writes `is_primary=true`.
 - Migrations: next number, idempotent (`if not exists` / `drop ... if exists`), additive-first, applied by a human; PR states before/after-deploy.
 - No new dependency without a spec-approved reason.
-- PR body follows the template; review artifacts are verbatim.
+- PR body follows the template (summary, changes, testing, notes); review artifacts and the human checklist go in the session report, not the PR.
 - Never merge. Never push main. Always `gh pr create --base dev`.
 
 ### Pitfalls (append via /retro; keep one line each)
@@ -137,10 +135,15 @@ the daily pool on every cold start, so leave it unset there.
   (saved|applied|viewed|interviewing|offered|rejected|withdrawn), notes,
   tailored_resume_id, applied_at, updated_at
 - `chat_messages`: per-user chat history (see `0005_chat_messages.sql`)
+- `chat_usage`: user_id, day (UTC date), count, refunds, updated_at; PK
+  (user_id, day). Daily chat-cap counter. Users can select their own row
+  only — no write policy or grant; moved only by `consume_chat_quota(p_limit)`
+  (authenticated, atomic, own row) and `refund_chat_quota(p_user_id, p_day)`
+  (service_role only, max 5 refunds/user/day). See `0007_chat_usage.sql`.
 - RLS enabled on all tables
 
 Migrations live in `supabase/migrations/` and are numbered sequentially
-(`0001`…`0006`). Add the next number; never renumber an existing one.
+(`0001`…`0007`). Add the next number; never renumber an existing one.
 
 ## Current State
 Shipped to `dev` through PR #24 — see ROADMAP.md for the full phase view.

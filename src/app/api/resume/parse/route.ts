@@ -155,9 +155,14 @@ export async function POST(request: NextRequest) {
         { status }
       );
     }
+    // A SyntaxError is malformed model output, which a resample fixes —
+    // retryable per the Definition of Done. Anything else here is a bug.
     const message = err instanceof Error ? err.message : "Unknown error";
     return NextResponse.json(
-      { error: `Failed to parse Gemini response: ${message}`, retryable: false },
+      {
+        error: `Failed to parse Gemini response: ${message}`,
+        retryable: err instanceof SyntaxError,
+      },
       { status: 502 }
     );
   }

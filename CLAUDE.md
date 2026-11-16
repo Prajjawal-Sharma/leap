@@ -49,7 +49,9 @@ and the release bar (§9.1); mockup exports live in docs/design/. Migrated code
 uses semantic tokens only (bg-card, text-muted-foreground, …), enforced by a
 token check that UI PR 1 adds to gate.sh. Legacy literal values (#0a0a0a,
 #6366f1, neutral-*) remain only in pages not yet migrated. The app is forced
-dark until UI PR 7. UI PR 1 replaces Geist with the system font stack.
+dark until UI PR 7. UI PR 1 replaced Geist with the system font stack. Theme
+and Solid-surfaces preferences live in the `leap-theme` / `leap-solid` cookies,
+read by the root layout so the first paint is right without a script.
 
 ## Model & key routing
 There are three distinct call paths into Gemini. They are not interchangeable.

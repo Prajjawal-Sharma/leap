@@ -91,7 +91,7 @@ export default function JobFeed({ initialMatches, totalSearched }: Props) {
       <p className="text-xs text-neutral-500">
         Showing top {initialMatches.length} of {totalSearched} matched roles
       </p>
-      <div className="grid gap-4">
+      <div className="grid grid-cols-1 gap-4">
         {initialMatches.map((m) => {
           const existing = appsByJobId.get(m.job.id) ?? null;
           const tailoredId = tailoredByJobId.get(m.job.id) ?? null;

@@ -612,7 +612,8 @@ export function Gallery() {
         </div>
       </div>
 
-      {/* Mounted here rather than in the root layout: no page uses toasts yet. */}
+      {/* The app's Toaster lives in the (dashboard) layout; /dev/ui is outside
+          that group, so the gallery mounts its own for the toast demos. */}
       <Toaster />
     </main>
   );

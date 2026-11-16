@@ -344,7 +344,7 @@ export default function JobCard({
 
       <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
         {location && (
-          <span className="rounded-md bg-white/5 ring-1 ring-white/10 px-2 py-1 text-neutral-300">
+          <span className="min-w-0 max-w-full break-words rounded-md bg-white/5 ring-1 ring-white/10 px-2 py-1 text-neutral-300">
             {location}
           </span>
         )}

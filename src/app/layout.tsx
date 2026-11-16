@@ -1,10 +1,14 @@
 import type { Metadata, Viewport } from "next";
-import Script from "next/script";
+import { cookies } from "next/headers";
 import "./globals.css";
 
-import { FORCED_THEME } from "@/lib/theme/config";
+import {
+  FORCED_THEME,
+  SOLID_COOKIE,
+  THEME_COOKIE,
+  htmlThemeState,
+} from "@/lib/theme/config";
 import { ThemeProvider } from "@/lib/theme/provider";
-import { themeScript } from "@/lib/theme/script";
 
 export const metadata: Metadata = {
   title: "Leap — AI job matching by real fit, not keywords",
@@ -23,28 +27,38 @@ export const viewport: Viewport = {
         { media: "(prefers-color-scheme: light)", color: "#F3F4F7" },
         { media: "(prefers-color-scheme: dark)", color: "#0F1115" },
       ],
+  // The mobile tab bar sits on env(safe-area-inset-bottom).
+  viewportFit: "cover",
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  // Theme and Solid surfaces come from cookies, so the server renders the
+  // right <html> attributes and the first paint is correct with or without
+  // JS — no pre-paint script. Reading cookies makes the previously static
+  // routes (the auth pages and /_not-found) render per request.
+  const store = await cookies();
+  const state = htmlThemeState(
+    store.get(THEME_COOKIE)?.value,
+    store.get(SOLID_COOKIE)?.value
+  );
+
   return (
-    // Server-rendering the forced theme is what guarantees a correct first
-    // paint even with JS disabled; the pre-paint script only has to agree.
-    // suppressHydrationWarning covers the classes that script adds (`solid`,
-    // and `dark` once the theme is user-controlled).
+    // suppressHydrationWarning covers attributes browser extensions add to
+    // <html>; the theme attributes themselves match between server and client.
     <html
       lang="en"
-      className={`${FORCED_THEME ?? ""} h-full antialiased`.trim()}
+      className={`${state.className} h-full antialiased`.trim()}
+      data-theme={state.dataTheme}
       suppressHydrationWarning
     >
       <body className="min-h-full flex flex-col">
-        <Script id="leap-theme" strategy="beforeInteractive">
-          {themeScript()}
-        </Script>
-        <ThemeProvider>{children}</ThemeProvider>
+        <ThemeProvider initialTheme={state.theme} initialSolid={state.solid}>
+          {children}
+        </ThemeProvider>
       </body>
     </html>
   );

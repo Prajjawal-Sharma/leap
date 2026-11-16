@@ -1,6 +1,16 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+
+import { pickResumeView, resumeStatus } from "@/lib/resume/lifecycle";
+import {
+  hasPdfSignature,
+  MAX_UPLOAD_BYTES,
+  parseErrorMessage,
+  PDF_SIGNATURE_WINDOW,
+  UPLOAD_NOT_PDF_MESSAGE,
+  UPLOAD_TOO_LARGE_MESSAGE,
+} from "@/lib/resume/upload-rules";
 
 type AtsBreakdown = {
   heuristic?: {
@@ -20,11 +30,11 @@ type Resume = {
   id: string;
   file_name: string;
   file_size_bytes: number | null;
-  storage_path: string;
   is_primary: boolean;
   ats_score: number | null;
   ats_breakdown: AtsBreakdown | null;
   parsed_content: Record<string, unknown> | null;
+  parse_error: string | null;
   created_at: string;
 };
 
@@ -68,7 +78,12 @@ const phaseOrder = (p: Phase): number => {
   }
 };
 
-const MAX_BYTES = 5 * 1024 * 1024;
+async function fetchResumes(): Promise<Resume[]> {
+  const res = await fetch("/api/resume/list", { cache: "no-store" });
+  if (!res.ok) throw new Error("Failed to load resumes");
+  const data = (await res.json()) as { resumes: Resume[] };
+  return data.resumes;
+}
 
 const scoreColor = (score: number) => {
   if (score >= 80) return "#22c55e";
@@ -112,6 +127,9 @@ export default function ResumePage() {
   const [failedStep, setFailedStep] = useState<Step | null>(null);
   const [retryable, setRetryable] = useState(false);
   const [lastResumeId, setLastResumeId] = useState<string | null>(null);
+  // True when the banner describes an upload found on load rather than one
+  // made in this visit — there is no progress to show for it.
+  const [restored, setRestored] = useState(false);
   const [resumes, setResumes] = useState<Resume[]>([]);
   const [activeResume, setActiveResume] = useState<Resume | null>(null);
   const [dragOver, setDragOver] = useState(false);
@@ -131,32 +149,47 @@ export default function ResumePage() {
     }
   }, [phase]);
 
+  // Sets the page from the user's uploads, newest first as the list returns
+  // them (see pickResumeView). A new upload only becomes the primary once it
+  // has been parsed and scored, so the newest row can be waiting — a parse
+  // that failed, or a tab closed mid-way — or impossible to process. Both are
+  // said plainly here, with a retry where one can help, and the analysis
+  // shown beside them is the earlier résumé's.
+  const showUploads = useCallback((list: Resume[]) => {
+    const view = pickResumeView(list);
+    setResumes(list);
+    setActiveResume(view.shown);
+    if (view.pending) {
+      const name = view.pending.file_name || "Your file";
+      setError(`${name} was uploaded but hasn't been processed yet.`);
+      setLastResumeId(view.pending.id);
+      setFailedStep("parse");
+      setRetryable(true);
+      setRestored(true);
+      setPhase("error");
+    } else if (view.failed) {
+      setError(parseErrorMessage(view.failed.parse_error));
+      setLastResumeId(null);
+      setFailedStep("parse");
+      setRetryable(false);
+      setRestored(true);
+      setPhase("error");
+    } else {
+      setError(null);
+      setFailedStep(null);
+      setRetryable(false);
+      setRestored(false);
+      setPhase(view.shown ? "ready" : "idle");
+    }
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
     const load = async () => {
       try {
-        const res = await fetch("/api/resume/list", { cache: "no-store" });
-        if (!res.ok) throw new Error("Failed to load resumes");
-        const data = (await res.json()) as { resumes: Resume[] };
+        const list = await fetchResumes();
         if (cancelled) return;
-        setResumes(data.resumes);
-        // A resume is "successful" only when both parse + score finished.
-        // The /api/resume/list response is already ordered by created_at desc
-        // so picking successful[0] when no primary is flagged gives us the
-        // most recent successful upload — robust against the historical bug
-        // where multiple resumes carried is_primary = true at once.
-        const successful = data.resumes.filter(
-          (r) => r.parsed_content !== null && r.ats_score !== null
-        );
-        const display =
-          successful.find((r) => r.is_primary) ?? successful[0] ?? null;
-        if (display) {
-          setActiveResume(display);
-          setPhase("ready");
-        } else {
-          setActiveResume(null);
-          setPhase("idle");
-        }
+        showUploads(list);
       } catch (err) {
         if (cancelled) return;
         setError(err instanceof Error ? err.message : "Failed to load");
@@ -167,15 +200,42 @@ export default function ResumePage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [showUploads]);
 
   const reset = () => {
     setError(null);
     setFailedStep(null);
     setRetryable(false);
+    setRestored(false);
     setLastResumeId(null);
     setActiveResume(null);
     setPhase("idle");
+  };
+
+  // A failed parse leaves the previous résumé in use. Reload the list so the
+  // page shows it, and so a parse that another request finished meanwhile is
+  // not reported as a failure.
+  const showParseFailure = async (
+    resumeId: string,
+    message: string,
+    canRetry: boolean
+  ) => {
+    try {
+      const list = await fetchResumes();
+      const row = list.find((r) => r.id === resumeId);
+      if (row && resumeStatus(row) === "parsed") {
+        showUploads(list);
+        return;
+      }
+      setResumes(list);
+      setActiveResume(pickResumeView(list).shown);
+    } catch {
+      // The list is context only; the failure below still stands.
+    }
+    setError(message);
+    setRetryable(canRetry);
+    setFailedStep("parse");
+    setPhase("error");
   };
 
   // Run the combined parse+score phase and the final list refresh, starting
@@ -186,6 +246,7 @@ export default function ResumePage() {
   const runFromStep = async (resumeId: string, fromStep: "parse" | "score") => {
     if (fromStep === "parse") {
       setPhase("parsing");
+      let failure: { message: string; canRetry: boolean } | null = null;
       try {
         const parseRes = await fetch("/api/resume/parse", {
           method: "POST",
@@ -194,31 +255,29 @@ export default function ResumePage() {
         });
         const parseJson = await parseRes.json();
         if (!parseRes.ok) {
-          setError(`Parse failed: ${parseJson.error ?? "Unknown error"}`);
-          setRetryable(Boolean(parseJson.retryable));
-          setFailedStep("parse");
-          setPhase("error");
-          return;
+          failure = {
+            // A file that can never be processed (a scan, a damaged PDF)
+            // comes with its own explanation and a code; anything else is a
+            // failure of this attempt.
+            message: parseJson.code
+              ? String(parseJson.error)
+              : `Parse failed: ${parseJson.error ?? "Unknown error"}`,
+            canRetry: Boolean(parseJson.retryable),
+          };
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message : "Unknown error";
-        setError(`Parse failed: ${msg}`);
-        setRetryable(true);
-        setFailedStep("parse");
-        setPhase("error");
+        failure = { message: `Parse failed: ${msg}`, canRetry: true };
+      }
+      if (failure) {
+        await showParseFailure(resumeId, failure.message, failure.canRetry);
         return;
       }
     }
 
     setPhase("scoring");
     try {
-      const refreshed = await fetch("/api/resume/list", { cache: "no-store" });
-      if (!refreshed.ok) throw new Error("Failed to refresh resume list");
-      const data = (await refreshed.json()) as { resumes: Resume[] };
-      setResumes(data.resumes);
-      const updated = data.resumes.find((r) => r.id === resumeId) ?? null;
-      setActiveResume(updated);
-      setPhase("ready");
+      showUploads(await fetchResumes());
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Unknown error";
       // The combined call already persisted the parse AND the score — only
@@ -235,21 +294,40 @@ export default function ResumePage() {
     setError(null);
     setFailedStep(null);
     setRetryable(false);
+    setRestored(false);
 
-    if (file.type !== "application/pdf") {
-      setError("Upload failed: Only PDF files are supported.");
+    const refuse = (message: string) => {
+      setError(message);
       setFailedStep("upload");
       setPhase("error");
+    };
+
+    // The same two checks the server makes, before anything is sent. The
+    // type the browser reports is not one of them: it comes from the file's
+    // extension, so a renamed text file passes it and an oddly-typed PDF
+    // fails it.
+    if (file.size > MAX_UPLOAD_BYTES) {
+      refuse(UPLOAD_TOO_LARGE_MESSAGE);
       return;
     }
-    if (file.size > MAX_BYTES) {
-      setError("Upload failed: File exceeds the 5MB limit.");
-      setFailedStep("upload");
-      setPhase("error");
+    let head: Uint8Array;
+    try {
+      head = new Uint8Array(
+        await file.slice(0, PDF_SIGNATURE_WINDOW).arrayBuffer()
+      );
+    } catch {
+      refuse("Upload failed: We couldn't read this file. Choose it again.");
+      return;
+    }
+    if (!hasPdfSignature(head)) {
+      refuse(UPLOAD_NOT_PDF_MESSAGE);
       return;
     }
 
     setPhase("uploading");
+    // A new row is about to exist, so what the page knew about the user's
+    // uploads is out of date. The analysis comes back from a fresh list.
+    setActiveResume(null);
     let resumeId: string;
     try {
       const formData = new FormData();
@@ -258,6 +336,16 @@ export default function ResumePage() {
         method: "POST",
         body: formData,
       });
+      // Read by status, not body: the platform answers an oversized request
+      // itself, with a 413 that is not JSON.
+      if (uploadRes.status === 413) {
+        refuse(UPLOAD_TOO_LARGE_MESSAGE);
+        return;
+      }
+      if (uploadRes.status === 415) {
+        refuse(UPLOAD_NOT_PDF_MESSAGE);
+        return;
+      }
       const uploadJson = await uploadRes.json();
       if (!uploadRes.ok) {
         throw new Error(uploadJson.error ?? "Upload failed");
@@ -265,9 +353,7 @@ export default function ResumePage() {
       resumeId = uploadJson.id as string;
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Unknown error";
-      setError(`Upload failed: ${msg}`);
-      setFailedStep("upload");
-      setPhase("error");
+      refuse(`Upload failed: ${msg}`);
       return;
     }
 
@@ -280,6 +366,7 @@ export default function ResumePage() {
     if (failedStep !== "parse" && failedStep !== "score") return;
     setError(null);
     setRetryable(false);
+    setRestored(false);
     const fromStep = failedStep;
     setFailedStep(null);
     void runFromStep(lastResumeId, fromStep);
@@ -287,7 +374,10 @@ export default function ResumePage() {
 
   const stepStatus = (step: Step): StepStatus => {
     if (failedStep === step) return "failed";
-    if (failedStep && STEP_INDEX[failedStep] < STEP_INDEX[step]) return "pending";
+    if (failedStep) {
+      // Steps before the one that failed did finish; the ones after never ran.
+      return STEP_INDEX[failedStep] > STEP_INDEX[step] ? "done" : "pending";
+    }
     if (phaseOrder(phase) > STEP_INDEX[step]) return "done";
     if (phaseOrder(phase) === STEP_INDEX[step]) return "active";
     return "pending";
@@ -321,6 +411,14 @@ export default function ResumePage() {
   const showDropzone = phase === "idle" || phase === "error" || isWorking;
   const showStatusBanner =
     isWorking || phase === "ready" || phase === "error";
+  // While a newer upload waits to be processed, the analysis on show belongs
+  // to an earlier one, and must not be called the current résumé.
+  const newerPending = pickResumeView(resumes).pending !== null;
+  const showAnalysis = phase === "ready" || phase === "error";
+  // Uploads that were never processed have no analysis to open.
+  const pastUploads = resumes.filter(
+    (r) => r.id !== activeResume?.id && resumeStatus(r) === "parsed"
+  );
   const breakdown = activeResume?.ats_breakdown ?? null;
   const strengths = breakdown?.gemini_analysis?.strengths ?? [];
   const improvements = breakdown?.gemini_analysis?.improvements ?? [];
@@ -399,14 +497,14 @@ export default function ResumePage() {
                 <button
                   type="button"
                   onClick={onRetry}
-                  className="shrink-0 rounded-md bg-red-500/20 hover:bg-red-500/30 ring-1 ring-red-500/40 px-3 py-1.5 text-xs font-medium text-red-100"
+                  className="shrink-0 min-h-11 rounded-md bg-red-500/20 hover:bg-red-500/30 ring-1 ring-red-500/40 px-3 py-1.5 text-xs font-medium text-red-100"
                 >
                   {failedStep === "score" ? "Retry refresh" : "Retry analysis"}
                 </button>
               )}
           </div>
 
-          <ol className="mt-4 grid grid-cols-3 gap-2">
+          <ol className="mt-4 grid grid-cols-3 gap-2" hidden={restored}>
             {STEPS.map((step) => {
               const status = stepStatus(step.key);
               const label =
@@ -498,7 +596,7 @@ export default function ResumePage() {
                   Drop your PDF here or click to upload
                 </p>
                 <p className="mt-2 text-xs text-neutral-500">
-                  PDF only · 5MB max
+                  PDF only · 4 MB max
                 </p>
               </>
             )}
@@ -507,17 +605,22 @@ export default function ResumePage() {
         </div>
       )}
 
-      {phase === "ready" && activeResume && (
+      {showAnalysis && activeResume && (
         <div ref={scoreCardRef} className="mt-8 space-y-8 scroll-mt-6">
           <div className="rounded-xl bg-neutral-900/60 ring-1 ring-white/10 p-6 flex flex-col md:flex-row md:items-center gap-6">
             <ScoreRing score={activeResume.ats_score ?? 0} />
             <div className="flex-1 min-w-0">
               <p className="text-xs uppercase tracking-wider text-neutral-500">
-                Current resume
+                {newerPending ? "Earlier upload" : "Current resume"}
               </p>
               <p className="mt-1 text-lg font-medium truncate">
                 {activeResume.file_name}
               </p>
+              {newerPending && activeResume.is_primary && (
+                <p className="mt-1 text-xs text-neutral-400">
+                  Your matches keep using it until the new one is processed.
+                </p>
+              )}
               {verdict && (
                 <p className="mt-3 text-sm text-neutral-300 leading-relaxed">
                   {verdict}
@@ -598,31 +701,29 @@ export default function ResumePage() {
             </div>
           )}
 
-          {resumes.length > 1 && (
+          {pastUploads.length > 0 && (
             <div className="rounded-xl bg-neutral-900/40 ring-1 ring-white/10 p-5">
               <h2 className="text-sm font-semibold text-neutral-200 mb-3">
                 Past uploads
               </h2>
               <ul className="space-y-2">
-                {resumes
-                  .filter((r) => r.id !== activeResume.id)
-                  .map((r) => (
-                    <li
-                      key={r.id}
-                      className="flex items-center justify-between text-sm"
+                {pastUploads.map((r) => (
+                  <li
+                    key={r.id}
+                    className="flex items-center justify-between text-sm"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => setActiveResume(r)}
+                      className="text-left text-neutral-300 hover:text-white truncate"
                     >
-                      <button
-                        type="button"
-                        onClick={() => setActiveResume(r)}
-                        className="text-left text-neutral-300 hover:text-white truncate"
-                      >
-                        {r.file_name}
-                      </button>
-                      <span className="text-neutral-500 text-xs ml-3 shrink-0">
-                        {r.ats_score ?? "—"}
-                      </span>
-                    </li>
-                  ))}
+                      {r.file_name}
+                    </button>
+                    <span className="text-neutral-500 text-xs ml-3 shrink-0">
+                      {r.ats_score ?? "—"}
+                    </span>
+                  </li>
+                ))}
               </ul>
             </div>
           )}

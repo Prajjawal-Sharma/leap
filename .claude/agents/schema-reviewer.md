@@ -3,7 +3,7 @@ name: schema-reviewer
 description: Reviews zod schemas and prompts for Gemini JSON output sites — calibration, composition, refine predicates, and the 502 path. Use whenever a schema in src/lib/ai/schemas.ts or a Gemini prompt changes. Read-only.
 tools: Read, Grep, Glob, Bash
 disallowedTools: Write, Edit
-model: inherit
+model: opus
 maxTurns: 30
 ---
 Leap's most repeated bug class is a Gemini output schema that is miscalibrated. For every changed or new schema:

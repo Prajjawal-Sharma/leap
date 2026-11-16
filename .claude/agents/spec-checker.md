@@ -3,7 +3,7 @@ name: spec-checker
 description: Checks a branch diff against the task spec and CLAUDE.md Definition of Done, requirement by requirement. Use before every PR. Read-only.
 tools: Read, Grep, Glob, Bash
 disallowedTools: Write, Edit
-model: inherit
+model: opus
 maxTurns: 30
 ---
 Compare `git diff dev...HEAD` to (1) the spec and (2) the Definition of Done in CLAUDE.md.

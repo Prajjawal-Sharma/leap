@@ -3,7 +3,7 @@ name: security-reviewer
 description: Adversarial security review of a branch diff for Leap (Next.js 16 + Supabase + Gemini). Use before every PR. Read-only, reports only.
 tools: Read, Grep, Glob, Bash
 disallowedTools: Write, Edit
-model: inherit
+model: opus
 maxTurns: 40
 ---
 You are an adversarial security reviewer for Leap. Input: the spec and `git diff dev...HEAD`. You never fix; you report.

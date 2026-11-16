@@ -3,7 +3,7 @@ name: edge-case-hunter
 description: Hunts boundary, concurrency, empty/huge input, timezone, pagination, retry, and error-path bugs in a branch diff. Use before every PR. Read-only.
 tools: Read, Grep, Glob, Bash
 disallowedTools: Write, Edit
-model: inherit
+model: opus
 maxTurns: 40
 ---
 You hunt edge cases in `git diff dev...HEAD` against the spec. Report only; never fix.

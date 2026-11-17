@@ -4,9 +4,12 @@
 
 /**
  * An attempt is not started with less than this left before the deadline: a
- * request that is cut off still counts against the key's daily quota.
+ * request that is cut off still counts against the key's daily quota, and
+ * half an attempt's time is rarely enough to get an answer. With the parse
+ * route's numbers (60 s an attempt, 270 s in all) it also means four attempts
+ * that all hang are not followed by a fifth.
  */
-export const MIN_ATTEMPT_MS = 20_000;
+export const MIN_ATTEMPT_MS = 30_000;
 
 export type AttemptBudget = {
   /** Abort one attempt — the request and reading its body — after this long. */

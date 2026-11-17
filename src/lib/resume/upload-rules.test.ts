@@ -5,8 +5,10 @@ import { describe, it } from "node:test";
 
 import {
   capStoredText,
+  fullestPageLength,
   hasPdfSignature,
   hasReadableText,
+  jsonbSafe,
   MAX_STORED_TEXT_CHARS,
   MAX_UPLOAD_BYTES,
   MIN_READABLE_CHARS,
@@ -67,20 +69,35 @@ describe("hasPdfSignature", () => {
   });
 });
 
-// What pdf-parse returns for a PDF with no text layer: only its own page
-// markers. Captured from pdf-parse 2.4.5 on generated image-only files.
-const imageOnly = (pages: number) =>
-  Array.from({ length: pages }, (_, i) => `-- ${i + 1} of ${pages} --`).join(
-    "\n\n\n\n"
-  );
-// The same with the line a scanner app stamps on every page.
-const stampedScan = (pages: number) =>
-  Array.from(
-    { length: pages },
-    (_, i) => `Scanned by CamScanner\n\n-- ${i + 1} of ${pages} --`
-  ).join("\n\n");
+// One page of a scan, as pdf-parse returns it: nothing, or whatever the
+// scanner wrote on it as text.
+const STAMP = "Scanned by CamScanner";
+const stampedPage = (n: number, total: number) =>
+  [STAMP, `Page ${n} of ${total}`, `2026-11-16 10:32:${String(n).padStart(2, "0")}`].join("\n");
+const scan = (pages: number, page: (n: number, total: number) => string) =>
+  Array.from({ length: pages }, (_, i) => page(i + 1, pages));
+// The whole-file text for the same scans, with pdf-parse's page markers.
+const wholeFile = (pages: string[]) =>
+  pages.map((text, i) => `${text}\n-- ${i + 1} of ${pages.length} --\n\n`).join("");
 
-const SPARSE_CV = [
+// The sparse-but-real fresher CV from schemas.test.ts (Pitfall 3), which
+// ResumeParseAndScoreSchema is written to accept, as the page it came from.
+const FRESHER_CV = [
+  "Meera Iyer",
+  "meera@example.com",
+  "Education",
+  "B.Sc, Anna University, 2026",
+  "Certifications",
+  "Google Data Analytics Certificate",
+].join("\n");
+const FRESHER_CV_NO_HEADINGS = [
+  "Meera Iyer",
+  "meera@example.com",
+  "B.Sc, Anna University, 2026",
+  "Google Data Analytics Certificate",
+].join("\n");
+
+const SHORT_CV = [
   "Rahul Sharma",
   "rahul.sharma@example.com | +91 98765 43210 | Bengaluru",
   "Education",
@@ -89,52 +106,98 @@ const SPARSE_CV = [
   "Java, Python, SQL, React",
   "Projects",
   "Library management system (Java, MySQL)",
-  "",
-  "-- 1 of 1 --",
 ].join("\n");
 
 describe("readableLength", () => {
-  it("is 0 for an image-only PDF of any length", () => {
-    for (const pages of [1, 4, 8, 40]) {
-      assert.equal(readableLength(imageOnly(pages)), 0, `${pages} pages`);
-    }
-  });
-  it("counts a line stamped on every page once", () => {
-    for (const pages of [1, 6, 40]) {
-      assert.equal(readableLength(stampedScan(pages)), 21, `${pages} pages`);
-    }
-  });
   it("is 0 for empty and blank text", () => {
     assert.equal(readableLength(""), 0);
     assert.equal(readableLength(" \n\t\r\n  "), 0);
+  });
+  it("does not count pdf-parse's page markers", () => {
+    assert.equal(readableLength("-- 1 of 4 --"), 0);
+    assert.equal(readableLength("-- 12 of 40 --\n\n\n\n-- 13 of 40 --"), 0);
+    assert.equal(readableLength("Jane Doe\n-- 1 of 1 --\n\n"), 8);
   });
   it("counts runs of whitespace as one space and joins lines with one", () => {
     assert.equal(readableLength("a   b\t\tc"), 5);
     assert.equal(readableLength("ab\ncd"), 5);
     assert.equal(readableLength("ab\r\n\r\n   cd   "), 5);
+    assert.equal(readableLength("ab\rcd"), 5);
+  });
+  it("counts every line, repeated or not, and text set one character a line", () => {
+    assert.equal(readableLength("2021\n2021\n2021"), 14);
+    assert.equal(readableLength("J\na\nn\ne"), 7);
+  });
+  it("measures the sample résumés used below", () => {
+    assert.equal(readableLength(FRESHER_CV), 115);
+    assert.equal(readableLength(FRESHER_CV_NO_HEADINGS), 90);
+    assert.equal(readableLength(SHORT_CV), 219);
+    assert.equal(readableLength(stampedPage(3, 12)), 54);
+  });
+});
+
+describe("fullestPageLength", () => {
+  it("is the readable length of the page with the most text", () => {
+    assert.equal(fullestPageLength(["", SHORT_CV, "References on request"]), 219);
+  });
+  it("is 0 for no pages and for pages with no text", () => {
+    assert.equal(fullestPageLength([]), 0);
+    assert.equal(fullestPageLength(["", "  \n ", ""]), 0);
+  });
+  it("does not grow with the number of pages", () => {
+    assert.equal(fullestPageLength(scan(1, () => STAMP)), 21);
+    assert.equal(fullestPageLength(scan(40, () => STAMP)), 21);
   });
 });
 
 describe("hasReadableText", () => {
-  it("refuses scans the old 50-character check let through", () => {
-    // Four image-only pages are 60 raw characters; six stamped pages are 220.
-    assert.ok(imageOnly(4).length >= 50);
-    assert.ok(stampedScan(6).length >= 200);
-    assert.equal(hasReadableText(imageOnly(4)), false);
-    assert.equal(hasReadableText(stampedScan(6)), false);
-    assert.equal(hasReadableText(stampedScan(40)), false);
+  it("draws the line at 80 readable characters on one page", () => {
+    assert.equal(MIN_READABLE_CHARS, 80);
+    assert.equal(hasReadableText(["x".repeat(79)]), false);
+    assert.equal(hasReadableText(["x".repeat(80)]), true);
+    assert.equal(hasReadableText(["x".repeat(79), "y".repeat(79)]), false);
   });
-  it("accepts the shortest plausible real résumé", () => {
-    assert.ok(readableLength(SPARSE_CV) >= MIN_READABLE_CHARS);
-    assert.equal(hasReadableText(SPARSE_CV), true);
+  it("refuses an image-only PDF of any length", () => {
+    for (const pages of [1, 4, 40]) {
+      assert.equal(hasReadableText(scan(pages, () => "")), false, `${pages} pages`);
+    }
+    assert.equal(hasReadableText([]), false);
   });
-  it("draws the line at exactly 200 readable characters", () => {
-    assert.equal(MIN_READABLE_CHARS, 200);
-    assert.equal(hasReadableText("x".repeat(199)), false);
-    assert.equal(hasReadableText("x".repeat(200)), true);
+  it("refuses a scan stamped on every page, however many pages", () => {
+    for (const pages of [1, 6, 40]) {
+      assert.equal(hasReadableText(scan(pages, () => STAMP)), false, `${pages} pages`);
+    }
+  });
+  it("refuses a scan whose stamp differs on every page", () => {
+    // Adding the pages up, as a whole-file total does, would let these through.
+    const pages = scan(12, stampedPage);
+    assert.ok(readableLength(wholeFile(pages)) > 600);
+    assert.equal(hasReadableText(pages), false);
+  });
+  it("refuses scans the old 50-character check on the whole file let through", () => {
+    assert.ok(wholeFile(scan(4, () => "")).trim().length >= 50);
+    assert.ok(wholeFile(scan(3, () => STAMP)).trim().length >= 50);
+    assert.equal(hasReadableText(scan(4, () => "")), false);
+    assert.equal(hasReadableText(scan(3, () => STAMP)), false);
+  });
+  it("accepts the sparse résumé the parse schema is written to accept", () => {
+    assert.equal(hasReadableText([FRESHER_CV]), true);
+    assert.equal(hasReadableText([FRESHER_CV_NO_HEADINGS]), true);
+  });
+  it("accepts short résumés, in any script", () => {
+    assert.equal(hasReadableText([SHORT_CV]), true);
+    assert.equal(
+      hasReadableText([
+        "मीरा अय्यर\nmeera@example.com\nशिक्षा\nबी.एससी, अन्ना विश्वविद्यालय, 2026\nप्रमाणपत्र\nगूगल डेटा एनालिटिक्स सर्टिफिकेट",
+      ]),
+      true
+    );
+  });
+  it("accepts a résumé whose text sits on a later page", () => {
+    assert.equal(hasReadableText(["", STAMP, SHORT_CV]), true);
   });
   it("does not count padding towards the threshold", () => {
-    assert.equal(hasReadableText(`${" ".repeat(500)}short${"\n".repeat(500)}`), false);
+    assert.equal(hasReadableText([`${" ".repeat(500)}short${"\n".repeat(500)}`]), false);
   });
 });
 
@@ -160,6 +223,37 @@ describe("capStoredText", () => {
     const capped = capStoredText("ok \ud83d and \ude00 done 😀");
     assert.equal(capped, "ok � and � done 😀");
     assert.doesNotThrow(() => JSON.parse(JSON.stringify(capped)));
+  });
+});
+
+describe("jsonbSafe", () => {
+  it("cleans every string in a parsed résumé, however deep", () => {
+    const cleaned = jsonbSafe({
+      full_name: "Ra\u0000hul",
+      skills: ["Ja\ud83dva", "SQL"],
+      experience: [{ company: "Ac\u0000me", role: "Engineer \ude00" }],
+    });
+    assert.deepEqual(cleaned, {
+      full_name: "Rahul",
+      skills: ["Ja�va", "SQL"],
+      experience: [{ company: "Acme", role: "Engineer �" }],
+    });
+    assert.equal(JSON.stringify(cleaned).includes("\\u0000"), false);
+  });
+  it("leaves numbers, booleans, null and clean text as they are", () => {
+    const value = {
+      score: 74,
+      signals: { has_summary: true, word_count: 310 },
+      verdict: "Solid — résumé 😀",
+      missing: null,
+    };
+    assert.deepEqual(jsonbSafe(value), value);
+  });
+  it("does not change the value it was given", () => {
+    const value = { full_name: "Ra\u0000hul", skills: ["a\u0000"] };
+    jsonbSafe(value);
+    assert.equal(value.full_name, "Ra\u0000hul");
+    assert.equal(value.skills[0], "a\u0000");
   });
 });
 

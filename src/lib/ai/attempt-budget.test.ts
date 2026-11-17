@@ -49,10 +49,10 @@ describe("capBackoff", () => {
 
 // The parse route's numbers: a 300 s function limit, a deadline 270 s after
 // the request arrived, 60 s per attempt, five attempts, and the client's
-// backoff of 2^n * 500 ms plus up to 500 ms of jitter. Replays the loop in
+// backoff of 2^n * 500 ms plus 0 to 500 ms of jitter. Replays the loop in
 // gemini-client.ts against a clock, with every attempt running to its
 // timeout — the slowest the loop can be.
-function slowestLoop(spentBeforeGeminiMs: number) {
+function slowestLoop(spentBeforeGeminiMs: number, jitterMs = 500) {
   const deadlineAt = T0 + 270_000;
   const budget = { attemptTimeoutMs: 60_000, deadlineAt };
   let now = T0 + spentBeforeGeminiMs;
@@ -63,23 +63,33 @@ function slowestLoop(spentBeforeGeminiMs: number) {
     assert.ok(timeout !== undefined && timeout <= 60_000);
     now += timeout;
     attempts++;
-    if (attempts < 5) now += capBackoff(2 ** (attempts - 1) * 500 + 500, now, deadlineAt);
+    if (attempts < 5) {
+      now += capBackoff(2 ** (attempts - 1) * 500 + jitterMs, now, deadlineAt);
+    }
   }
   return { attempts, endedAfterMs: now - T0 };
 }
 
 describe("the parse route's time budget", () => {
   it("ends inside the 270 s deadline when every attempt times out", () => {
-    for (const spent of [0, 2_000, 10_000, 45_000, 120_000, 249_000]) {
-      const { endedAfterMs } = slowestLoop(spent);
-      assert.ok(endedAfterMs <= 270_000, `spent ${spent}: ended at ${endedAfterMs}`);
+    for (const spent of [0, 2_000, 10_000, 45_000, 120_000, 239_000]) {
+      for (const jitter of [0, 500]) {
+        const { endedAfterMs } = slowestLoop(spent, jitter);
+        assert.ok(endedAfterMs <= 270_000, `spent ${spent}: ended at ${endedAfterMs}`);
+      }
     }
   });
-  it("fits four full attempts after a normal download and extraction", () => {
-    assert.deepEqual(slowestLoop(5_000), { attempts: 4, endedAfterMs: 254_500 });
+  it("makes four attempts, never five, when every one of them hangs", () => {
+    // Even with nothing spent before the loop and the shortest backoff, what
+    // is left after the fourth timeout is under the minimum.
+    assert.deepEqual(slowestLoop(0, 0), { attempts: 4, endedAfterMs: 247_500 });
+    assert.deepEqual(slowestLoop(0, 500), { attempts: 4, endedAfterMs: 249_500 });
+    assert.deepEqual(slowestLoop(5_000, 500), { attempts: 4, endedAfterMs: 254_500 });
   });
-  it("makes no attempt when the earlier steps used the time", () => {
-    assert.equal(slowestLoop(255_000).attempts, 0);
+  it("makes fewer attempts when the earlier steps used the time", () => {
+    assert.equal(slowestLoop(100_000).attempts, 3);
+    assert.equal(slowestLoop(239_000).attempts, 1);
+    assert.equal(slowestLoop(241_000).attempts, 0);
     assert.equal(slowestLoop(400_000).attempts, 0);
   });
 });

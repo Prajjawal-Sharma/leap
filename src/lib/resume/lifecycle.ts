@@ -60,6 +60,20 @@ export function selectAbandoned(
     .map((row) => row.id);
 }
 
+/**
+ * The files a cleanup may remove from storage: those of the rows it deleted,
+ * except any that a row left behind still names. Nothing stops a user from
+ * pointing two of their rows at one file, and removing it would take the PDF
+ * from under a résumé that is still in use.
+ */
+export function removablePaths(
+  deletedPaths: string[],
+  pathsStillNamed: string[]
+): string[] {
+  const kept = new Set(pathsStillNamed);
+  return [...new Set(deletedPaths)].filter((path) => !kept.has(path));
+}
+
 // --- Resume page ------------------------------------------------------------
 
 type ViewFields = StatusFields & { is_primary: boolean };

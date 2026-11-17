@@ -286,6 +286,16 @@ export async function withGeminiKey<T>(
     const detail = await res.text().catch(() => "");
     const snippet = detail.slice(0, 200);
 
+    if (signal?.aborted) {
+      // The limit ran out while the error body was still arriving. Without
+      // the body the status cannot be told apart (a model 404 from a caller
+      // error), so it counts as the timeout it is.
+      lastError = new GeminiError("Gemini request timed out", 0, true);
+      attempt++;
+      if (attempt < MAX_ATTEMPTS) await backoff(attempt);
+      continue;
+    }
+
     if (res.status === 429) {
       markCooldown(picked.key);
       lastError = new GeminiError(

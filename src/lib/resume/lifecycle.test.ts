@@ -6,6 +6,7 @@ import { describe, it } from "node:test";
 import {
   ABANDONED_AFTER_MS,
   pickResumeView,
+  removablePaths,
   resumeStatus,
   selectAbandoned,
   type CleanupCandidate,
@@ -106,6 +107,28 @@ describe("selectAbandoned", () => {
     const rows = [candidate({ id: "b" }), candidate({ id: "a" }), candidate({ id: "c" })];
     assert.deepEqual(selectAbandoned(rows, NOW), ["b", "a", "c"]);
     assert.deepEqual(selectAbandoned([], NOW), []);
+  });
+});
+
+describe("removablePaths", () => {
+  it("returns the files of the rows that were deleted", () => {
+    assert.deepEqual(removablePaths(["u/1-a.pdf", "u/2-b.pdf"], []), [
+      "u/1-a.pdf",
+      "u/2-b.pdf",
+    ]);
+  });
+  it("keeps a file that a row left behind still names", () => {
+    assert.deepEqual(
+      removablePaths(["u/1-a.pdf", "u/2-primary.pdf"], ["u/2-primary.pdf"]),
+      ["u/1-a.pdf"]
+    );
+  });
+  it("lists a file once when several deleted rows named it", () => {
+    assert.deepEqual(removablePaths(["u/1-a.pdf", "u/1-a.pdf"], []), ["u/1-a.pdf"]);
+  });
+  it("returns nothing when nothing was deleted or every file is still named", () => {
+    assert.deepEqual(removablePaths([], ["u/1-a.pdf"]), []);
+    assert.deepEqual(removablePaths(["u/1-a.pdf"], ["u/1-a.pdf"]), []);
   });
 });
 

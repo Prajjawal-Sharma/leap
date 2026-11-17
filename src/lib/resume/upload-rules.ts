@@ -62,43 +62,51 @@ export function parseErrorMessage(code: string | null | undefined): string {
 }
 
 /**
- * Fewer readable characters than this and the PDF is treated as a scan.
+ * A PDF is treated as a scan when none of its pages has this many readable
+ * characters.
  *
- * Measured with readableLength, not the raw length: pdf-parse adds a marker
- * for every page ("-- 1 of 4 --"), so an image-only PDF of four pages is 60
- * raw characters and passed the 50-character check this replaces, spending a
- * Gemini call on nothing. Scanner apps also stamp a line on every page.
- * With markers and repeated lines left out an image-only file measures 0 and
- * a stamped scan about 21 at any page count, while the shortest real résumé —
- * name, contact line, one degree, a few skills, one project — is a little
- * over 200. Below roughly 30 words there is nothing to parse, score or match
- * on either.
+ * The measure is the fullest page, not the whole file, because what a scan
+ * carries as text is a little on every page: pdf-parse's own marker ("-- 1
+ * of 4 --"), a scanner app's stamp, a page label, a timestamp. Added up over
+ * pages those pass any total — four image-only pages are 60 raw characters
+ * and passed the 50-character check this replaces, spending a Gemini call on
+ * nothing — while one page of them stays in the tens.
+ *
+ * The number sits between the two things it has to tell apart. A stamp, a
+ * page label and a timestamp on one page are under 60 characters together,
+ * and most scans have none of them. The sparsest résumé the parse schema is
+ * written to accept — a name, an email, one degree and one certificate (the
+ * fresher fixture in schemas.test.ts) — is 90 as bare lines and 115 with its
+ * two section headings. A résumé that sparse still gets parsed and scored;
+ * refusing it here would be permanent, with a message about scans that is
+ * wrong for it (Pitfall 3: sparse real data must pass).
  */
-export const MIN_READABLE_CHARS = 200;
+export const MIN_READABLE_CHARS = 80;
 
 const PAGE_MARKER_RE = /^-- \d+ of \d+ --$/;
 
 /**
- * Length of the text a person would recognise as content: page markers and
- * blank lines dropped, a line that repeats counted once, runs of whitespace
- * counted as one space.
+ * Length of the text a person would recognise as content: blank lines and
+ * pdf-parse page markers dropped, runs of whitespace counted as one space.
  */
 export function readableLength(text: string): number {
-  const seen = new Set<string>();
   let length = 0;
-  for (const raw of text.split(/\r?\n/)) {
+  for (const raw of text.split(/\r\n?|\n/)) {
     const line = raw.replace(/\s+/g, " ").trim();
-    if (line.length === 0 || PAGE_MARKER_RE.test(line) || seen.has(line)) {
-      continue;
-    }
-    seen.add(line);
+    if (line.length === 0 || PAGE_MARKER_RE.test(line)) continue;
     length += line.length + (length > 0 ? 1 : 0);
   }
   return length;
 }
 
-export function hasReadableText(text: string): boolean {
-  return readableLength(text) >= MIN_READABLE_CHARS;
+/** Readable length of the page with the most text; 0 for no pages. */
+export function fullestPageLength(pages: string[]): number {
+  return pages.reduce((max, page) => Math.max(max, readableLength(page)), 0);
+}
+
+/** False for a scan: no page has enough text to be a page of a résumé. */
+export function hasReadableText(pages: string[]): boolean {
+  return fullestPageLength(pages) >= MIN_READABLE_CHARS;
 }
 
 /**
@@ -119,6 +127,27 @@ export function capStoredText(text: string): string {
     .replace(/\u0000/g, "")
     .slice(0, MAX_STORED_TEXT_CHARS)
     .toWellFormed();
+}
+
+/**
+ * A copy of a JSON value with every string made storable in Postgres jsonb.
+ * The model's reply is built from the same extracted text, so it can carry
+ * the same NULs and unpaired surrogates into the fields it returns; the
+ * schema accepts them and the save would then fail on every retry.
+ */
+export function jsonbSafe<T>(value: T): T {
+  if (typeof value === "string") {
+    return value.replace(/\u0000/g, "").toWellFormed() as T;
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => jsonbSafe(item)) as T;
+  }
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [key, jsonbSafe(item)])
+    ) as T;
+  }
+  return value;
 }
 
 /**

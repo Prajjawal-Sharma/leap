@@ -6,6 +6,11 @@ import {
   type ModelMessage,
 } from "ai";
 
+import {
+  attemptTimeout,
+  capBackoff,
+  type AttemptBudget,
+} from "./attempt-budget";
 import { textDeltas } from "./text-deltas";
 
 // Three call paths into the Gemini API:
@@ -150,7 +155,7 @@ type GeminiResponse = {
   }>;
 };
 
-export type CallGeminiOptions = {
+export type CallGeminiOptions = AttemptBudget & {
   temperature?: number;
   model?: string;
   onAttempt?: (info: AttemptInfo) => void;
@@ -158,7 +163,7 @@ export type CallGeminiOptions = {
 
 export type AttemptInfo = { slot: number; attempt: number; keyName: string };
 
-export type WithGeminiKeyOptions = {
+export type WithGeminiKeyOptions = AttemptBudget & {
   onAttempt?: (info: AttemptInfo) => void;
 };
 
@@ -179,13 +184,23 @@ const MODEL_UNAVAILABLE_RE = /\bmodels?\b/i;
 // rotation continues immediately (no backoff — nothing is rate-limited);
 // the call only fails with 404 once EVERY key has rejected the model.
 // Genuine caller errors (400, 403, non-model 404) still fail fast.
+//
+// Time is unbounded unless the caller asks otherwise (attempt-budget.ts):
+// attemptTimeoutMs aborts one attempt, request and body both, and counts it
+// like a network error; deadlineAt ends the whole call, so that no attempt
+// starts and no backoff runs past it. A caller with a function time limit
+// passes both — a request the platform kills mid-flight returns nothing the
+// client can read.
 export async function withGeminiKey<T>(
-  doRequest: (key: string) => Promise<Response>,
+  doRequest: (key: string, signal?: AbortSignal) => Promise<Response>,
   parseSuccess: (res: Response) => Promise<T>,
   opts: WithGeminiKeyOptions = {}
 ): Promise<T> {
   let lastError: GeminiError | null = null;
   const unavailableSlots = new Set<number>();
+
+  const backoff = (attemptsMade: number) =>
+    sleep(capBackoff(backoffMs(attemptsMade - 1), Date.now(), opts.deadlineAt));
 
   let attempt = 0;
   while (attempt < MAX_ATTEMPTS) {
@@ -199,6 +214,15 @@ export async function withGeminiKey<T>(
       );
     }
 
+    const timeoutMs = attemptTimeout(Date.now(), opts);
+    if (timeoutMs === null) {
+      // Out of time. Whatever stopped the earlier attempts is the better
+      // message, unless it would tell the caller not to try again.
+      throw lastError?.retryable
+        ? lastError
+        : new GeminiError("Gemini did not answer in time", 504, true);
+    }
+
     const picked = pickFreshKey(unavailableSlots);
     if (!picked) {
       throw new GeminiError(
@@ -209,17 +233,24 @@ export async function withGeminiKey<T>(
     }
     opts.onAttempt?.({ slot: picked.slot, attempt, keyName: picked.name });
 
+    const signal =
+      timeoutMs === undefined ? undefined : AbortSignal.timeout(timeoutMs);
+
     let res: Response;
     try {
-      res = await doRequest(picked.key);
+      res = await doRequest(picked.key, signal);
     } catch (err) {
       lastError = new GeminiError(
-        err instanceof Error ? err.message : "Network error",
+        signal?.aborted
+          ? "Gemini request timed out"
+          : err instanceof Error
+            ? err.message
+            : "Network error",
         0,
         true
       );
       attempt++;
-      if (attempt < MAX_ATTEMPTS) await sleep(backoffMs(attempt - 1));
+      if (attempt < MAX_ATTEMPTS) await backoff(attempt);
       continue;
     }
 
@@ -227,13 +258,20 @@ export async function withGeminiKey<T>(
       try {
         return await parseSuccess(res);
       } catch (err) {
+        if (signal?.aborted && !(err instanceof GeminiError)) {
+          // The limit ran out while the body was still arriving.
+          lastError = new GeminiError("Gemini request timed out", 0, true);
+          attempt++;
+          if (attempt < MAX_ATTEMPTS) await backoff(attempt);
+          continue;
+        }
         if (err instanceof GeminiError && err.retryable) {
           // A retryable parse failure (e.g. structurally invalid JSON from
           // a flaky model) — an independent resample usually succeeds, so
           // spend an attempt instead of surfacing it to the caller.
           lastError = err;
           attempt++;
-          if (attempt < MAX_ATTEMPTS) await sleep(backoffMs(attempt - 1));
+          if (attempt < MAX_ATTEMPTS) await backoff(attempt);
           continue;
         }
         if (err instanceof GeminiError) throw err;
@@ -248,6 +286,16 @@ export async function withGeminiKey<T>(
     const detail = await res.text().catch(() => "");
     const snippet = detail.slice(0, 200);
 
+    if (signal?.aborted) {
+      // The limit ran out while the error body was still arriving. Without
+      // the body the status cannot be told apart (a model 404 from a caller
+      // error), so it counts as the timeout it is.
+      lastError = new GeminiError("Gemini request timed out", 0, true);
+      attempt++;
+      if (attempt < MAX_ATTEMPTS) await backoff(attempt);
+      continue;
+    }
+
     if (res.status === 429) {
       markCooldown(picked.key);
       lastError = new GeminiError(
@@ -256,7 +304,7 @@ export async function withGeminiKey<T>(
         true
       );
       attempt++;
-      if (attempt < MAX_ATTEMPTS) await sleep(backoffMs(attempt - 1));
+      if (attempt < MAX_ATTEMPTS) await backoff(attempt);
       continue;
     }
 
@@ -267,7 +315,7 @@ export async function withGeminiKey<T>(
         true
       );
       attempt++;
-      if (attempt < MAX_ATTEMPTS) await sleep(backoffMs(attempt - 1));
+      if (attempt < MAX_ATTEMPTS) await backoff(attempt);
       continue;
     }
 
@@ -301,7 +349,7 @@ export async function withGeminiKey<T>(
       true
     );
     attempt++;
-    if (attempt < MAX_ATTEMPTS) await sleep(backoffMs(attempt - 1));
+    if (attempt < MAX_ATTEMPTS) await backoff(attempt);
   }
 
   throw lastError ?? new GeminiError("Gemini call failed", 502, true);
@@ -487,11 +535,12 @@ export async function callGemini(
   scheduleKeyAvailabilityCheck(model);
 
   return withGeminiKey<string>(
-    (key) =>
+    (key, signal) =>
       fetch(
         `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`,
         {
           method: "POST",
+          signal,
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             contents: [{ role: "user", parts: [{ text: prompt }] }],
@@ -540,7 +589,11 @@ export async function callGemini(
       }
       return text;
     },
-    { onAttempt: opts.onAttempt }
+    {
+      onAttempt: opts.onAttempt,
+      attemptTimeoutMs: opts.attemptTimeoutMs,
+      deadlineAt: opts.deadlineAt,
+    }
   );
 }
 

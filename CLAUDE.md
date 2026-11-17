@@ -96,7 +96,7 @@ the daily pool on every cold start, so leave it unset there.
 - `tsc --noEmit`, `eslint src --max-warnings=0`, `npm test`, `npm run build` all green (`.claude/hooks/gate.sh`).
 - Every Gemini JSON output site: `JSON.parse → schema.safeParse` before any persistence; failure → 502 `{retryable:true}`, zero writes; schema composes existing ones; caps justified by that prompt's observed output.
 - Every user- or job-derived string entering a prompt is fenced (BEGIN/END + guard line) with `===` runs collapsed.
-- Every `resumes` read that expects a primary/uploaded resume filters `kind='uploaded'`; only the upload promote step writes `is_primary=true`.
+- Every `resumes` read that expects a primary/uploaded resume filters `kind='uploaded'`; upload inserts `is_primary=false`, and only `promote_parsed_resume()` (called by the parse route once parse and score validate) writes `is_primary=true`.
 - Migrations: next number, idempotent (`if not exists` / `drop ... if exists`), additive-first, applied by a human; PR states before/after-deploy.
 - No new dependency without a spec-approved reason.
 - PR body follows the template (summary, changes, testing, notes); review artifacts and the human checklist go in the session report, not the PR.
@@ -127,8 +127,18 @@ the daily pool on every cold start, so leave it unset there.
   current_job_title, years_experience, target_roles[], target_companies[],
   notice_period_days, expected_salary_min/max/currency, linkedin_url,
   github_url, created_at, updated_at
-- `resumes`: id, user_id, file_name, file_path, parsed_content (jsonb),
-  ats_score, is_primary, kind ('uploaded' | 'tailored'), job_id, created_at
+- `resumes`: id, user_id, storage_path, file_name, file_size_bytes,
+  parsed_content (jsonb), ats_score, ats_breakdown (jsonb), is_primary,
+  kind ('uploaded' | 'tailored'), job_id, parse_error ('no_text' |
+  'unreadable'; null unless the file can never be processed), created_at.
+  `storage_path` is null for tailored rows; otherwise it must be the owner's
+  id followed by plain path segments (CHECK
+  `resumes_storage_path_owner_check`, the same rule as
+  `src/lib/resume/storage-path.ts`). Upload inserts `is_primary = false`;
+  `promote_parsed_resume(...)` (security invoker, authenticated only) saves
+  parse and score and moves the primary flag in one transaction. A row counts
+  as parsed when `parsed_content` and `ats_score` are both set. See
+  `0008_resume_pipeline.sql`.
 - `jobs`: id, source, source_id, title, company, location, is_remote,
   description, requirements, employment_type, apply_url, posted_at, is_active,
   last_seen_at, ingested_at
@@ -143,9 +153,19 @@ the daily pool on every cold start, so leave it unset there.
   (authenticated, atomic, own row) and `refund_chat_quota(p_user_id, p_day)`
   (service_role only, max 5 refunds/user/day). See `0007_chat_usage.sql`.
 - RLS enabled on all tables
+- Storage: one private bucket, `resumes` — 4 MB limit, `application/pdf`
+  only, no policies for `anon` or `authenticated` (recorded in
+  `0008_resume_pipeline.sql`, which refuses to apply if a storage policy opens
+  it). Files are read and written only by the server with the service role,
+  after the path has been checked against the signed-in user. PDF text is
+  read by `readPdfText` (`src/lib/resume/pdf-text.ts`), which cannot be timed
+  out from inside the process: the upload route (30 s) reads every file once
+  before storing it under `<user id>/checked/`, and the parse route (300 s)
+  reads only files from that folder (`isReadCheckedPath`). Never read
+  unvetted PDF bytes in a long-running route.
 
 Migrations live in `supabase/migrations/` and are numbered sequentially
-(`0001`…`0007`). Add the next number; never renumber an existing one.
+(`0001`…`0008`). Add the next number; never renumber an existing one.
 
 ## Current State
 Shipped to `dev` through PR #24 — see ROADMAP.md for the full phase view.

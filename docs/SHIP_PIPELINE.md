@@ -219,7 +219,7 @@ Hunt these classes first (all have bitten this codebase):
 - Auth/session: open redirects on any `next`/`redirectTo` read (must go through `safeNext`); recovery links that swap an existing session; RLS-scoped client on every user path; service-role key never on a user path.
 - Prompt injection: any user- or job-derived text entering a Gemini prompt sits inside BEGIN/END data fences with the guard line, and `===` runs are collapsed. Try to escape a fence with crafted END markers, tabs, and C0 control chars.
 - Gemini JSON output sites: JSON.parse → zod `safeParse` before ANY persistence; failure → 502 `{retryable:true}` with zero writes.
-- Data isolation: no `resumes` query that expects an uploaded/primary resume can return `kind='tailored'`; exactly one `is_primary=true` writer (upload promote).
+- Data isolation: no `resumes` query that expects an uploaded/primary resume can return `kind='tailored'`; exactly one `is_primary=true` writer (`promote_parsed_resume()`, called by the parse route; upload inserts `false`).
 - Secrets: nothing in code, logs, or PR text.
 - Quota/abuse: no uncapped path on the paid `GEMINI_KEY_1`; no cap derived from rows the user can delete.
 
@@ -461,7 +461,7 @@ Correct these facts first (verified by the July recon, all currently wrong or st
 - `tsc --noEmit`, `eslint src --max-warnings=0`, `npm test`, `npm run build` all green (`.claude/hooks/gate.sh`).
 - Every Gemini JSON output site: `JSON.parse → schema.safeParse` before any persistence; failure → 502 `{retryable:true}`, zero writes; schema composes existing ones; caps justified by that prompt's observed output.
 - Every user- or job-derived string entering a prompt is fenced (BEGIN/END + guard line) with `===` runs collapsed.
-- Every `resumes` read that expects a primary/uploaded resume filters `kind='uploaded'`; only the upload promote step writes `is_primary=true`.
+- Every `resumes` read that expects a primary/uploaded resume filters `kind='uploaded'`; upload inserts `is_primary=false`, and only `promote_parsed_resume()` (called by the parse route once parse and score validate) writes `is_primary=true`.
 - Migrations: next number, idempotent (`if not exists` / `drop ... if exists`), additive-first, applied by a human; PR states before/after-deploy.
 - No new dependency without a spec-approved reason.
 - PR body follows the template (summary, changes, testing, notes); review artifacts and the human checklist go in the session report, not the PR.

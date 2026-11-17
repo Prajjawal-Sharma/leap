@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 
+import { withoutResumeText } from "@/lib/resume/upload-rules";
 import { createServerSupabase } from "@/lib/supabase-server";
 
 export const runtime = "nodejs";
@@ -20,15 +21,26 @@ export async function GET() {
   const { data, error } = await supabase
     .from("resumes")
     .select(
-      "id, file_name, file_size_bytes, storage_path, is_primary, ats_score, ats_breakdown, parsed_content, created_at"
+      "id, file_name, file_size_bytes, is_primary, ats_score, ats_breakdown, parsed_content, parse_error, created_at"
     )
     .eq("user_id", user.id)
     .eq("kind", "uploaded")
     .order("created_at", { ascending: false });
 
   if (error) {
+    // The page shows only "Failed to load resumes". A column missing because
+    // migration 0008 was not applied would otherwise leave no trace.
+    console.error(`[resume/list] query failed: ${error.message}`);
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
-  return NextResponse.json({ resumes: data ?? [] });
+  // parsed_content keeps every parsed field; only the raw extracted text
+  // stored beside them stays on the server. It is up to 16,000 characters
+  // per upload and the page never showed it.
+  const resumes = (data ?? []).map((row) => ({
+    ...row,
+    parsed_content: withoutResumeText(row.parsed_content),
+  }));
+
+  return NextResponse.json({ resumes });
 }

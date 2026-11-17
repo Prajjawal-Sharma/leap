@@ -1,15 +1,136 @@
 import { NextResponse, type NextRequest } from "next/server";
 
+import {
+  ABANDONED_AFTER_MS,
+  removablePaths,
+  selectAbandoned,
+} from "@/lib/resume/lifecycle";
+import { readPdfText } from "@/lib/resume/pdf-text";
+import { buildStoragePath, isOwnStoragePath } from "@/lib/resume/storage-path";
+import {
+  hasPdfSignature,
+  MAX_UPLOAD_BYTES,
+  UPLOAD_NOT_PDF_MESSAGE,
+  UPLOAD_TOO_LARGE_MESSAGE,
+} from "@/lib/resume/upload-rules";
 import { createAdminSupabase } from "@/lib/supabase-admin";
 import { createServerSupabase } from "@/lib/supabase-server";
 
 export const runtime = "nodejs";
+// What the parse route's limit used to be. This route now reads the PDF once
+// before storing it (see below), and reading a PDF cannot be interrupted from
+// inside the process, so this is the limit a file built to be slow runs into.
+export const maxDuration = 30;
 
-const MAX_BYTES = 5 * 1024 * 1024;
 const BUCKET = "resumes";
+// Most abandoned rows one upload removes; a user normally has none or one,
+// and the next upload takes the rest. Kept small because each row deleted
+// costs one more query before its file is removed.
+const CLEANUP_BATCH = 20;
 
-const sanitize = (name: string) =>
-  name.replace(/[^a-zA-Z0-9._-]+/g, "_").slice(0, 120) || "resume.pdf";
+type UserSupabase = Awaited<ReturnType<typeof createServerSupabase>>;
+type AdminSupabase = ReturnType<typeof createAdminSupabase>;
+
+// Uploads that were never processed would otherwise pile up, each with its
+// PDF: a parse that kept failing, a scan, a tab closed too early. Nothing
+// runs on a schedule for this, so the user's next upload clears them.
+//
+// Rows go first, through the user's own client: the DELETE repeats every
+// condition, so a row that was parsed or promoted since the SELECT stays, and
+// RLS keeps it to the caller's rows. Only the files of rows that were really
+// deleted are then removed. That takes the service role, because the bucket
+// has no policies for users, and each path is checked against the caller's
+// folder first. If Storage fails at that point the files outlive their rows;
+// the other order would leave rows pointing at files that are gone.
+//
+// Best effort: the upload has already succeeded and must not fail over this.
+async function removeAbandoned(
+  supabase: UserSupabase,
+  admin: AdminSupabase,
+  userId: string,
+  keepId: string
+): Promise<void> {
+  try {
+    const now = Date.now();
+    const cutoff = new Date(now - ABANDONED_AFTER_MS).toISOString();
+
+    const { data: candidates, error: listError } = await supabase
+      .from("resumes")
+      .select("id, is_primary, parsed_content, created_at")
+      .eq("user_id", userId)
+      .eq("kind", "uploaded")
+      .eq("is_primary", false)
+      .is("parsed_content", null)
+      .lt("created_at", cutoff)
+      .order("created_at", { ascending: true })
+      .limit(CLEANUP_BATCH);
+
+    if (listError) {
+      console.error(`[resume/upload] cleanup lookup failed: ${listError.message}`);
+      return;
+    }
+
+    const ids = selectAbandoned(candidates ?? [], now, keepId);
+    if (ids.length === 0) return;
+
+    const { data: deleted, error: deleteError } = await supabase
+      .from("resumes")
+      .delete()
+      .in("id", ids)
+      .eq("user_id", userId)
+      .eq("kind", "uploaded")
+      .eq("is_primary", false)
+      .is("parsed_content", null)
+      .lt("created_at", cutoff)
+      .select("id, storage_path");
+
+    if (deleteError) {
+      console.error(`[resume/upload] cleanup delete failed: ${deleteError.message}`);
+      return;
+    }
+
+    const deletedPaths = (deleted ?? [])
+      .map((row) => row.storage_path as unknown)
+      .filter((path): path is string => isOwnStoragePath(path, userId));
+    if (deletedPaths.length === 0) return;
+
+    // Two of a user's rows can name one file (they may write storage_path on
+    // their own rows). A file that a remaining row still names stays. Asked
+    // one path at a time, each answer a single row, so that no number of rows
+    // naming one file can crowd another out of a capped result; if an answer
+    // cannot be had, that file is left where it is.
+    const stillNamed: string[] = [];
+    for (const path of new Set(deletedPaths)) {
+      const { data: namers, error: namedError } = await supabase
+        .from("resumes")
+        .select("id")
+        .eq("user_id", userId)
+        .eq("storage_path", path)
+        .limit(1);
+      if (namedError) {
+        console.error(
+          `[resume/upload] an abandoned file was left in storage, could not check for other rows: ${namedError.message}`
+        );
+        stillNamed.push(path);
+      } else if ((namers ?? []).length > 0) {
+        stillNamed.push(path);
+      }
+    }
+
+    const paths = removablePaths(deletedPaths, stillNamed);
+    if (paths.length === 0) return;
+
+    const { error: removeError } = await admin.storage.from(BUCKET).remove(paths);
+    if (removeError) {
+      console.error(
+        `[resume/upload] ${paths.length} abandoned file(s) left in storage: ${removeError.message}`
+      );
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "unknown error";
+    console.error(`[resume/upload] cleanup threw: ${message}`);
+  }
+}
 
 export async function POST(request: NextRequest) {
   const supabase = await createServerSupabase();
@@ -39,29 +160,43 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  if (file.type !== "application/pdf") {
-    return NextResponse.json(
-      { error: "File must be a PDF (application/pdf)" },
-      { status: 400 }
-    );
-  }
-
-  if (file.size > MAX_BYTES) {
-    return NextResponse.json(
-      { error: "File exceeds 5MB limit" },
-      { status: 400 }
-    );
-  }
-
   if (file.size === 0) {
     return NextResponse.json({ error: "File is empty" }, { status: 400 });
   }
 
-  const safeName = sanitize(file.name);
-  const storagePath = `${user.id}/${Date.now()}-${safeName}`;
+  if (file.size > MAX_UPLOAD_BYTES) {
+    return NextResponse.json(
+      { error: UPLOAD_TOO_LARGE_MESSAGE },
+      { status: 413 }
+    );
+  }
 
   const arrayBuffer = await file.arrayBuffer();
   const bytes = new Uint8Array(arrayBuffer);
+
+  // The file's own bytes decide, not the type the browser declared for it.
+  if (!hasPdfSignature(bytes)) {
+    return NextResponse.json({ error: UPLOAD_NOT_PDF_MESSAGE }, { status: 415 });
+  }
+
+  // Read the PDF once before anything is stored. Nothing is done with the
+  // text here — whether the file is a résumé, a scan or damaged is the parse
+  // route's to say, against the stored row. The point is that reading it
+  // finishes: a file built to keep pdf-parse busy ends this request at its
+  // 30 s limit and is never stored. Everything that is stored goes to the
+  // user's "checked" folder, and the parse route, which may run for 300 s,
+  // reads from nowhere else (see pdf-text.ts, storage-path.ts).
+  try {
+    await readPdfText(bytes);
+  } catch (err) {
+    // An error is an answer too, and a quick one. The parse route reports it
+    // to the user; the log is for the case where it is not the file at all —
+    // pdf.js or the canvas module failing to load would otherwise go unseen.
+    const message = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+    console.warn(`[resume/upload] reading the PDF before storing it failed: ${message}`);
+  }
+
+  const storagePath = buildStoragePath(user.id, file.name, Date.now());
 
   const admin = createAdminSupabase();
   const { error: uploadError } = await admin.storage
@@ -78,9 +213,11 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  // New uploads always become the primary. Two-step (demote others, then
-  // promote new) is best-effort and runs *after* the insert succeeds — the
-  // resume row is the source of truth; the primary flag is a UI affordance.
+  // Not primary yet. The résumé the feed, tailoring and chat read stays the
+  // previous one until this file has been parsed and scored;
+  // promote_parsed_resume (migration 0008) then saves both and moves the flag
+  // in one transaction. A parse that fails or never runs changes nothing the
+  // user already had.
   const { data: inserted, error: insertError } = await supabase
     .from("resumes")
     .insert({
@@ -88,7 +225,7 @@ export async function POST(request: NextRequest) {
       storage_path: storagePath,
       file_name: file.name,
       file_size_bytes: file.size,
-      is_primary: true,
+      is_primary: false,
     })
     .select("id, storage_path, file_name")
     .single();
@@ -101,31 +238,7 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  try {
-    const { error: demoteErr } = await supabase
-      .from("resumes")
-      .update({ is_primary: false })
-      .eq("user_id", user.id)
-      .neq("id", inserted.id);
-    if (demoteErr) {
-      console.error(
-        `[resume/upload] failed to demote other primaries: ${demoteErr.message}`
-      );
-    }
-
-    const { error: promoteErr } = await supabase
-      .from("resumes")
-      .update({ is_primary: true })
-      .eq("id", inserted.id);
-    if (promoteErr) {
-      console.error(
-        `[resume/upload] failed to ensure new resume primary: ${promoteErr.message}`
-      );
-    }
-  } catch (err) {
-    const message = err instanceof Error ? err.message : "unknown error";
-    console.error(`[resume/upload] primary flag sweep threw: ${message}`);
-  }
+  await removeAbandoned(supabase, admin, user.id, inserted.id);
 
   return NextResponse.json(inserted, { status: 201 });
 }

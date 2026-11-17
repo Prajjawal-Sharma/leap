@@ -18,8 +18,11 @@ import { createServerSupabase } from "@/lib/supabase-server";
 export const runtime = "nodejs";
 
 const BUCKET = "resumes";
-// Most abandoned rows one upload removes. A user normally has none or one.
-const CLEANUP_BATCH = 50;
+// Most abandoned rows one upload removes; a user normally has none or one,
+// and the next upload takes the rest. Kept small because the paths of the
+// deleted rows go into the URL of the follow-up query, and a gateway refuses
+// a request line much over 8 KB (a path can be 171 characters).
+const CLEANUP_BATCH = 20;
 
 type UserSupabase = Awaited<ReturnType<typeof createServerSupabase>>;
 type AdminSupabase = ReturnType<typeof createAdminSupabase>;

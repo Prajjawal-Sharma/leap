@@ -157,7 +157,11 @@ the daily pool on every cold start, so leave it unset there.
   only, no policies for `anon` or `authenticated` (recorded in
   `0008_resume_pipeline.sql`, which refuses to apply if a storage policy opens
   it). Files are read and written only by the server with the service role,
-  after the path has been checked against the signed-in user.
+  after the path has been checked against the signed-in user. PDF text is
+  read by `readPdfText` (`src/lib/resume/pdf-text.ts`), which cannot be timed
+  out from inside the process: the upload route (30 s) reads every file once
+  before storing it, and the parse route (300 s) only reads stored files.
+  Never read unvetted PDF bytes in a long-running route.
 
 Migrations live in `supabase/migrations/` and are numbered sequentially
 (`0001`…`0008`). Add the next number; never renumber an existing one.

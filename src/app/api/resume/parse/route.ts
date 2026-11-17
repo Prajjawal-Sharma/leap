@@ -1,8 +1,3 @@
-// IMPORTANT: pdf-parse/worker must be imported before pdf-parse — the worker
-// entry polyfills browser globals (DOMMatrix, ImageData, …) that pdfjs-dist
-// expects but Node's serverless runtime does not provide.
-import { CanvasFactory } from "pdf-parse/worker";
-import { PDFParse } from "pdf-parse";
 import { NextResponse, type NextRequest } from "next/server";
 
 import { callGemini, GeminiError } from "@/lib/ai/gemini-client";
@@ -17,6 +12,11 @@ import {
   type ResumeScoreAnalysis,
 } from "@/lib/ai/schemas";
 import { resumeStatus } from "@/lib/resume/lifecycle";
+import {
+  readPdfText,
+  UnreadablePdfError,
+  type PdfText,
+} from "@/lib/resume/pdf-text";
 import { isOwnStoragePath } from "@/lib/resume/storage-path";
 import {
   capStoredText,
@@ -49,30 +49,8 @@ const PARSE_BUDGET_MS = 270_000;
 // left (attempt-budget.ts), which is four when every attempt hangs.
 const GEMINI_ATTEMPT_TIMEOUT_MS = 60_000;
 
-// Reading the PDF gets the limit the whole route used to have, not the new
-// one: pdf-parse has no time limit of its own, and a file can be built to
-// keep it busy. A résumé is a few pages and the prompt reads 16,000
-// characters, so pages past the thirtieth are not read at all.
-const EXTRACT_TIMEOUT_MS = 30_000;
-const MAX_PDF_PAGES = 30;
-
-class ExtractionTimeout extends Error {
-  constructor() {
-    super(`no text after ${EXTRACT_TIMEOUT_MS} ms`);
-    this.name = "ExtractionTimeout";
-  }
-}
-
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-// Errors from pdf-parse that describe the file itself. Trying again cannot
-// change them, so the upload is marked failed. Any other error may pass.
-const UNREADABLE_PDF_ERRORS = new Set([
-  "InvalidPDFException",
-  "PasswordException",
-  "FormatError",
-]);
 
 const stripFences = (s: string) =>
   s
@@ -123,15 +101,23 @@ export async function POST(request: NextRequest) {
     .eq("id", resumeId)
     .single();
 
+  // PGRST116 is "no such row" (or not the caller's: RLS hides it). Anything
+  // else is the query failing — a timeout, or a column missing because
+  // migration 0008 was not applied — and says nothing about the row, so it is
+  // logged and answered as a failure that can be retried, not as a 404.
+  if (fetchError && fetchError.code !== "PGRST116") {
+    console.error(
+      `[resume/parse] could not read resume ${resumeId}: ${fetchError.message}`
+    );
+    return NextResponse.json(
+      {
+        error: "We couldn't load this résumé just now. Try again.",
+        retryable: true,
+      },
+      { status: 500 }
+    );
+  }
   if (fetchError || !resume) {
-    // "No such row" is the ordinary case. Anything else — a column missing
-    // because migration 0008 was not applied, for one — has to show up
-    // somewhere other than a 404 on the user's screen.
-    if (fetchError && fetchError.code !== "PGRST116") {
-      console.error(
-        `[resume/parse] could not read resume ${resumeId}: ${fetchError.message}`
-      );
-    }
     return NextResponse.json({ error: "Resume not found" }, { status: 404 });
   }
 
@@ -214,34 +200,18 @@ export async function POST(request: NextRequest) {
   const arrayBuffer = await blob.arrayBuffer();
   const bytes = new Uint8Array(arrayBuffer);
 
-  let extractedText: string;
-  let pageTexts: string[];
-  let parser: PDFParse | null = null;
-  let extractTimer: ReturnType<typeof setTimeout> | undefined;
+  // Not time-limited here, because it cannot be (see pdf-text.ts): the file
+  // was read the same way by the upload route, under that route's 30 s limit,
+  // before it was stored.
+  let pdf: PdfText;
   try {
-    parser = new PDFParse({ data: bytes, CanvasFactory });
-    const reading = parser.getText({ first: MAX_PDF_PAGES });
-    // If the timer wins, the read is abandoned and destroy() below ends it;
-    // its eventual rejection has nowhere else to go.
-    reading.catch(() => {});
-    const result = await Promise.race([
-      reading,
-      new Promise<never>((_, reject) => {
-        extractTimer = setTimeout(
-          () => reject(new ExtractionTimeout()),
-          EXTRACT_TIMEOUT_MS
-        );
-      }),
-    ]);
-    extractedText = result.text ?? "";
-    pageTexts = result.pages.map((page) => page.text ?? "");
+    pdf = await readPdfText(bytes);
   } catch (err) {
-    const name = err instanceof Error ? err.name : "";
     const message = err instanceof Error ? err.message : "Unknown error";
     console.error(
-      `[resume/parse] text extraction failed for resume ${resumeId}: ${name} ${message}`
+      `[resume/parse] text extraction failed for resume ${resumeId}: ${message}`
     );
-    if (UNREADABLE_PDF_ERRORS.has(name)) {
+    if (err instanceof UnreadablePdfError) {
       await markFailed("unreadable");
       return NextResponse.json(
         { error: UNREADABLE_PDF_MESSAGE, code: "unreadable", retryable: false },
@@ -255,16 +225,14 @@ export async function POST(request: NextRequest) {
       },
       { status: 500 }
     );
-  } finally {
-    clearTimeout(extractTimer);
-    if (parser) await parser.destroy().catch(() => {});
   }
+  const pageTexts = pdf.pages;
 
   // A scan has no text layer, and a model cannot parse what is not there.
   // Stop before the Gemini call rather than spend one to find that out. The
   // test is on the fullest page (see MIN_READABLE_CHARS), and the measurement
   // is logged so a refusal that should not have happened can be found.
-  const trimmed = extractedText.trim();
+  const trimmed = pdf.text.trim();
   if (!hasReadableText(pageTexts)) {
     console.warn(
       `[resume/parse] resume ${resumeId} refused as a scan: the fullest of ${pageTexts.length} page(s) read has ${fullestPageLength(pageTexts)} readable characters`

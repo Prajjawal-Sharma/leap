@@ -5,6 +5,7 @@ import {
   removablePaths,
   selectAbandoned,
 } from "@/lib/resume/lifecycle";
+import { readPdfText } from "@/lib/resume/pdf-text";
 import { buildStoragePath, isOwnStoragePath } from "@/lib/resume/storage-path";
 import {
   hasPdfSignature,
@@ -16,12 +17,15 @@ import { createAdminSupabase } from "@/lib/supabase-admin";
 import { createServerSupabase } from "@/lib/supabase-server";
 
 export const runtime = "nodejs";
+// What the parse route's limit used to be. This route now reads the PDF once
+// before storing it (see below), and reading a PDF cannot be interrupted from
+// inside the process, so this is the limit a file built to be slow runs into.
+export const maxDuration = 30;
 
 const BUCKET = "resumes";
 // Most abandoned rows one upload removes; a user normally has none or one,
-// and the next upload takes the rest. Kept small because the paths of the
-// deleted rows go into the URL of the follow-up query, and a gateway refuses
-// a request line much over 8 KB (a path can be 171 characters).
+// and the next upload takes the rest. Kept small because each row deleted
+// costs one more query before its file is removed.
 const CLEANUP_BATCH = 20;
 
 type UserSupabase = Awaited<ReturnType<typeof createServerSupabase>>;
@@ -91,25 +95,29 @@ async function removeAbandoned(
     if (deletedPaths.length === 0) return;
 
     // Two of a user's rows can name one file (they may write storage_path on
-    // their own rows). A file that a remaining row still names stays; if that
-    // cannot be established, nothing is removed.
-    const { data: stillNamed, error: namedError } = await supabase
-      .from("resumes")
-      .select("storage_path")
-      .eq("user_id", userId)
-      .in("storage_path", deletedPaths);
-
-    if (namedError) {
-      console.error(
-        `[resume/upload] ${deletedPaths.length} abandoned file(s) left in storage, could not check for other rows: ${namedError.message}`
-      );
-      return;
+    // their own rows). A file that a remaining row still names stays. Asked
+    // one path at a time, each answer a single row, so that no number of rows
+    // naming one file can crowd another out of a capped result; if an answer
+    // cannot be had, that file is left where it is.
+    const stillNamed: string[] = [];
+    for (const path of new Set(deletedPaths)) {
+      const { data: namers, error: namedError } = await supabase
+        .from("resumes")
+        .select("id")
+        .eq("user_id", userId)
+        .eq("storage_path", path)
+        .limit(1);
+      if (namedError) {
+        console.error(
+          `[resume/upload] an abandoned file was left in storage, could not check for other rows: ${namedError.message}`
+        );
+        stillNamed.push(path);
+      } else if ((namers ?? []).length > 0) {
+        stillNamed.push(path);
+      }
     }
 
-    const paths = removablePaths(
-      deletedPaths,
-      (stillNamed ?? []).map((row) => String(row.storage_path))
-    );
+    const paths = removablePaths(deletedPaths, stillNamed);
     if (paths.length === 0) return;
 
     const { error: removeError } = await admin.storage.from(BUCKET).remove(paths);
@@ -169,6 +177,18 @@ export async function POST(request: NextRequest) {
   // The file's own bytes decide, not the type the browser declared for it.
   if (!hasPdfSignature(bytes)) {
     return NextResponse.json({ error: UPLOAD_NOT_PDF_MESSAGE }, { status: 415 });
+  }
+
+  // Read the PDF once before anything is stored. Nothing is done with the
+  // text here — whether the file is a résumé, a scan or damaged is the parse
+  // route's to say, against the stored row. The point is that reading it
+  // finishes: a file built to keep pdf-parse busy ends this request at its
+  // 30 s limit and is never stored, so the parse route, which may run for
+  // 300 s, only reads files that got through here (see pdf-text.ts).
+  try {
+    await readPdfText(bytes);
+  } catch {
+    // An error is an answer too, and a quick one. The parse route reports it.
   }
 
   const storagePath = buildStoragePath(user.id, file.name, Date.now());

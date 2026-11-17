@@ -61,8 +61,9 @@ alter table public.resumes
 --
 -- src/lib/resume/storage-path.ts applies the same grammar in the route;
 -- change the two together. Every path the upload route has written fits it
--- ('<user id>/<epoch ms>-<name>', the name reduced to the same characters),
--- and a pre-flight count on 2026-11-16 found no row that does not.
+-- ('<user id>/<epoch ms>-<name>' until now, '<user id>/checked/<epoch ms>-
+-- <name>' from this change on, the name reduced to the same characters), and
+-- a pre-flight count on 2026-11-16 found no row that does not.
 alter table public.resumes
   drop constraint if exists resumes_storage_path_owner_check;
 alter table public.resumes

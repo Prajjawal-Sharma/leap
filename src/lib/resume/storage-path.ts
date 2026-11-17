@@ -14,6 +14,13 @@ const UUID_RE =
 const SEGMENT_RE = /^[A-Za-z0-9_-][A-Za-z0-9._-]*$/;
 const MAX_NAME_CHARS = 120;
 
+// The folder, inside each user's own, that uploads go to since the upload
+// route began reading every PDF before storing it (see pdf-text.ts). Users
+// cannot write to the bucket, so a file is in this folder only if that route
+// put it there, after the read had finished. Files stored earlier sit directly
+// in the user's folder and were never read under a time limit.
+const READ_CHECKED_DIR = "checked";
+
 /** The uploaded file's name reduced to characters a path segment may hold. */
 export function safeFileName(name: string): string {
   return (
@@ -23,15 +30,15 @@ export function safeFileName(name: string): string {
 }
 
 /**
- * `<user id>/<epoch ms>-<safe name>`. The timestamp keeps the segment from
- * ever being "." or "..", whatever the file was called.
+ * `<user id>/checked/<epoch ms>-<safe name>`. The timestamp keeps the last
+ * segment from ever being "." or "..", whatever the file was called.
  */
 export function buildStoragePath(
   userId: string,
   fileName: string,
   now: number
 ): string {
-  return `${userId}/${now}-${safeFileName(fileName)}`;
+  return `${userId}/${READ_CHECKED_DIR}/${now}-${safeFileName(fileName)}`;
 }
 
 /**
@@ -48,4 +55,20 @@ export function isOwnStoragePath(path: unknown, userId: string): path is string 
     .slice(prefix.length)
     .split("/")
     .every((segment) => SEGMENT_RE.test(segment));
+}
+
+/**
+ * True for a path of the user's own that the upload route stored after
+ * reading the PDF once. The parse route may run for five minutes and reads
+ * nothing else: a row can be made to name any file in its owner's folder,
+ * but only the upload route can put a file in this one.
+ */
+export function isReadCheckedPath(
+  path: unknown,
+  userId: string
+): path is string {
+  return (
+    isOwnStoragePath(path, userId) &&
+    path.startsWith(`${userId}/${READ_CHECKED_DIR}/`)
+  );
 }

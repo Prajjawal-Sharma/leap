@@ -160,8 +160,9 @@ the daily pool on every cold start, so leave it unset there.
   after the path has been checked against the signed-in user. PDF text is
   read by `readPdfText` (`src/lib/resume/pdf-text.ts`), which cannot be timed
   out from inside the process: the upload route (30 s) reads every file once
-  before storing it, and the parse route (300 s) only reads stored files.
-  Never read unvetted PDF bytes in a long-running route.
+  before storing it under `<user id>/checked/`, and the parse route (300 s)
+  reads only files from that folder (`isReadCheckedPath`). Never read
+  unvetted PDF bytes in a long-running route.
 
 Migrations live in `supabase/migrations/` and are numbered sequentially
 (`0001`…`0008`). Add the next number; never renumber an existing one.

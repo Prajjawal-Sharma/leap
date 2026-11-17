@@ -17,7 +17,7 @@ import {
   UnreadablePdfError,
   type PdfText,
 } from "@/lib/resume/pdf-text";
-import { isOwnStoragePath } from "@/lib/resume/storage-path";
+import { isOwnStoragePath, isReadCheckedPath } from "@/lib/resume/storage-path";
 import {
   capStoredText,
   fullestPageLength,
@@ -176,6 +176,24 @@ export async function POST(request: NextRequest) {
     }
   };
 
+  // Reading a PDF cannot be time-limited from inside the process, and this
+  // route may run for 300 s. So it reads only files the upload route has
+  // already read once, under its own 30 s limit, before storing them — which
+  // is what the user's "checked" folder holds (storage-path.ts, pdf-text.ts).
+  // A file stored before that check existed is refused for good; the row is
+  // unprocessed, so nothing the user had is lost by uploading it again.
+  if (!isReadCheckedPath(resume.storage_path, user.id)) {
+    await markFailed("unreadable");
+    return NextResponse.json(
+      {
+        error: "This upload can no longer be processed. Upload your résumé again.",
+        code: "unreadable",
+        retryable: false,
+      },
+      { status: 422 }
+    );
+  }
+
   const admin = createAdminSupabase();
   const { data: blob, error: downloadError } = await admin.storage
     .from(BUCKET)
@@ -200,9 +218,7 @@ export async function POST(request: NextRequest) {
   const arrayBuffer = await blob.arrayBuffer();
   const bytes = new Uint8Array(arrayBuffer);
 
-  // Not time-limited here, because it cannot be (see pdf-text.ts): the file
-  // was read the same way by the upload route, under that route's 30 s limit,
-  // before it was stored.
+  // The same read the upload route did before storing this file.
   let pdf: PdfText;
   try {
     pdf = await readPdfText(bytes);

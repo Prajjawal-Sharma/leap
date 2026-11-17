@@ -183,8 +183,9 @@ export async function POST(request: NextRequest) {
   // text here — whether the file is a résumé, a scan or damaged is the parse
   // route's to say, against the stored row. The point is that reading it
   // finishes: a file built to keep pdf-parse busy ends this request at its
-  // 30 s limit and is never stored, so the parse route, which may run for
-  // 300 s, only reads files that got through here (see pdf-text.ts).
+  // 30 s limit and is never stored. Everything that is stored goes to the
+  // user's "checked" folder, and the parse route, which may run for 300 s,
+  // reads from nowhere else (see pdf-text.ts, storage-path.ts).
   try {
     await readPdfText(bytes);
   } catch {

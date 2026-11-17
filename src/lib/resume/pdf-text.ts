@@ -15,9 +15,11 @@ import { PDFParse } from "pdf-parse";
 // the routes call this in is what keeps that limit short:
 //   - /api/resume/upload reads every file here BEFORE storing it, under a
 //     30 s maxDuration. A file that does not finish in that time ends the
-//     upload and never reaches storage.
+//     upload and never reaches storage. Files that do are stored in the
+//     user's "checked" folder (storage-path.ts), which only that route can
+//     write to.
 //   - /api/resume/parse, which may run for 300 s for Gemini's sake, reads
-//     only files that are in storage — files that already finished here once.
+//     only files from that folder — files that already finished here once.
 // Do not call this from a long-running route on bytes that did not come
 // through the upload route.
 

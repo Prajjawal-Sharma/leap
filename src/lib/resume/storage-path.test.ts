@@ -6,6 +6,7 @@ import { describe, it } from "node:test";
 import {
   buildStoragePath,
   isOwnStoragePath,
+  isReadCheckedPath,
   safeFileName,
 } from "./storage-path";
 
@@ -30,10 +31,10 @@ describe("safeFileName", () => {
 });
 
 describe("buildStoragePath", () => {
-  it("is the user's folder, then the timestamp and the safe name", () => {
+  it("is the user's folder, the checked folder, then the timestamp and the safe name", () => {
     assert.equal(
       buildStoragePath(ME, "Jane Doe CV.pdf", 1700000000000),
-      `${ME}/1700000000000-Jane_Doe_CV.pdf`
+      `${ME}/checked/1700000000000-Jane_Doe_CV.pdf`
     );
   });
   it("always produces a path the ownership check accepts", () => {
@@ -54,6 +55,7 @@ describe("buildStoragePath", () => {
     for (const name of names) {
       const path = buildStoragePath(ME, name, 1700000000000);
       assert.equal(isOwnStoragePath(path, ME), true, `rejected: ${path}`);
+      assert.equal(isReadCheckedPath(path, ME), true, `not checked: ${path}`);
     }
   });
 });
@@ -142,5 +144,26 @@ describe("isOwnStoragePath", () => {
         `/storage/v1/object/resumes/${path}`
       );
     }
+  });
+});
+
+describe("isReadCheckedPath", () => {
+  it("accepts a path the upload route writes now", () => {
+    assert.equal(isReadCheckedPath(`${ME}/checked/1700000000000-cv.pdf`, ME), true);
+  });
+  it("rejects a path from before uploads were read first", () => {
+    assert.equal(isReadCheckedPath(`${ME}/1700000000000-cv.pdf`, ME), false);
+    assert.equal(isReadCheckedPath(`${ME}/1700000000000-checked.pdf`, ME), false);
+  });
+  it("rejects the folder itself and look-alikes", () => {
+    for (const rest of ["checked", "checked/", "checkedx/cv.pdf", "a/checked/cv.pdf", "Checked/cv.pdf"]) {
+      assert.equal(isReadCheckedPath(`${ME}/${rest}`, ME), false, rest);
+    }
+  });
+  it("rejects another user's checked folder and anything the ownership rule rejects", () => {
+    assert.equal(isReadCheckedPath(`${VICTIM}/checked/1700000000000-cv.pdf`, ME), false);
+    assert.equal(isReadCheckedPath(`${ME}/checked/../1700000000000-cv.pdf`, ME), false);
+    assert.equal(isReadCheckedPath(`${ME}/../${ME}/checked/cv.pdf`, ME), false);
+    assert.equal(isReadCheckedPath(null, ME), false);
   });
 });

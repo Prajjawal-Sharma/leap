@@ -20,7 +20,9 @@ import { resumeStatus } from "@/lib/resume/lifecycle";
 import { isOwnStoragePath } from "@/lib/resume/storage-path";
 import {
   capStoredText,
+  fullestPageLength,
   hasReadableText,
+  jsonbSafe,
   NO_TEXT_MESSAGE,
   UNREADABLE_PDF_MESSAGE,
   withoutResumeText,
@@ -43,9 +45,23 @@ const BUCKET = "resumes";
 // request arrived, so a slow download or extraction shortens the loop and
 // not the margin. 30 s are left for saving the result and answering.
 const PARSE_BUDGET_MS = 270_000;
-// One attempt. The loop makes up to five, but not once fewer than 20 s
-// remain (attempt-budget.ts) — four at most when every attempt hangs.
+// One attempt. The loop makes up to five, but starts none with under 30 s
+// left (attempt-budget.ts), which is four when every attempt hangs.
 const GEMINI_ATTEMPT_TIMEOUT_MS = 60_000;
+
+// Reading the PDF gets the limit the whole route used to have, not the new
+// one: pdf-parse has no time limit of its own, and a file can be built to
+// keep it busy. A résumé is a few pages and the prompt reads 16,000
+// characters, so pages past the thirtieth are not read at all.
+const EXTRACT_TIMEOUT_MS = 30_000;
+const MAX_PDF_PAGES = 30;
+
+class ExtractionTimeout extends Error {
+  constructor() {
+    super(`no text after ${EXTRACT_TIMEOUT_MS} ms`);
+    this.name = "ExtractionTimeout";
+  }
+}
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -108,6 +124,14 @@ export async function POST(request: NextRequest) {
     .single();
 
   if (fetchError || !resume) {
+    // "No such row" is the ordinary case. Anything else — a column missing
+    // because migration 0008 was not applied, for one — has to show up
+    // somewhere other than a 404 on the user's screen.
+    if (fetchError && fetchError.code !== "PGRST116") {
+      console.error(
+        `[resume/parse] could not read resume ${resumeId}: ${fetchError.message}`
+      );
+    }
     return NextResponse.json({ error: "Resume not found" }, { status: 404 });
   }
 
@@ -124,6 +148,19 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  // Users can write storage_path on their own rows, and the download below
+  // runs with the service role, which no storage policy restrains. Only a
+  // path inside the caller's own folder, with nothing in it a URL could
+  // resolve elsewhere, is ever fetched (see storage-path.ts; the same rule is
+  // a CHECK constraint since migration 0008). Checked before anything else is
+  // done for the row, so no answer is given for one that fails it.
+  if (!isOwnStoragePath(resume.storage_path, user.id)) {
+    console.error(
+      `[resume/parse] refused resume ${resumeId}: storage_path is outside user ${user.id}'s folder`
+    );
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
   // Already parsed and scored: answer from the row. Retry is offered whenever
   // an upload looks unprocessed, and by the time it is pressed an earlier
   // request may have finished the job; a second Gemini call would buy
@@ -133,21 +170,8 @@ export async function POST(request: NextRequest) {
       parsed: withoutResumeText(resume.parsed_content),
       ats_score: resume.ats_score,
       ats_breakdown: resume.ats_breakdown,
-      promoted: false,
       already_processed: true,
     });
-  }
-
-  // Users can write storage_path on their own rows, and the download below
-  // runs with the service role, which no storage policy restrains. Only a
-  // path inside the caller's own folder, with nothing in it a URL could
-  // resolve elsewhere, is ever fetched (see storage-path.ts; the same rule is
-  // a CHECK constraint since migration 0008).
-  if (!isOwnStoragePath(resume.storage_path, user.id)) {
-    console.error(
-      `[resume/parse] refused resume ${resumeId}: storage_path is outside user ${user.id}'s folder`
-    );
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
   // Records that this upload can never be processed, so the Resume page can
@@ -172,8 +196,17 @@ export async function POST(request: NextRequest) {
     .download(resume.storage_path);
 
   if (downloadError || !blob) {
+    // Retryable, so the page offers Retry now as it would after a reload:
+    // the row stays unprocessed either way. Storage's own text goes to the
+    // log, not the page.
+    console.error(
+      `[resume/parse] download failed for resume ${resumeId}: ${downloadError?.message ?? "no data"}`
+    );
     return NextResponse.json(
-      { error: `Failed to download resume: ${downloadError?.message ?? "unknown"}` },
+      {
+        error: "We couldn't fetch your file just now. Try again.",
+        retryable: true,
+      },
       { status: 500 }
     );
   }
@@ -182,11 +215,26 @@ export async function POST(request: NextRequest) {
   const bytes = new Uint8Array(arrayBuffer);
 
   let extractedText: string;
+  let pageTexts: string[];
   let parser: PDFParse | null = null;
+  let extractTimer: ReturnType<typeof setTimeout> | undefined;
   try {
     parser = new PDFParse({ data: bytes, CanvasFactory });
-    const result = await parser.getText();
+    const reading = parser.getText({ first: MAX_PDF_PAGES });
+    // If the timer wins, the read is abandoned and destroy() below ends it;
+    // its eventual rejection has nowhere else to go.
+    reading.catch(() => {});
+    const result = await Promise.race([
+      reading,
+      new Promise<never>((_, reject) => {
+        extractTimer = setTimeout(
+          () => reject(new ExtractionTimeout()),
+          EXTRACT_TIMEOUT_MS
+        );
+      }),
+    ]);
     extractedText = result.text ?? "";
+    pageTexts = result.pages.map((page) => page.text ?? "");
   } catch (err) {
     const name = err instanceof Error ? err.name : "";
     const message = err instanceof Error ? err.message : "Unknown error";
@@ -208,13 +256,19 @@ export async function POST(request: NextRequest) {
       { status: 500 }
     );
   } finally {
+    clearTimeout(extractTimer);
     if (parser) await parser.destroy().catch(() => {});
   }
 
   // A scan has no text layer, and a model cannot parse what is not there.
-  // Stop before the Gemini call rather than spend one to find that out.
+  // Stop before the Gemini call rather than spend one to find that out. The
+  // test is on the fullest page (see MIN_READABLE_CHARS), and the measurement
+  // is logged so a refusal that should not have happened can be found.
   const trimmed = extractedText.trim();
-  if (!hasReadableText(trimmed)) {
+  if (!hasReadableText(pageTexts)) {
+    console.warn(
+      `[resume/parse] resume ${resumeId} refused as a scan: the fullest of ${pageTexts.length} page(s) read has ${fullestPageLength(pageTexts)} readable characters`
+    );
     await markFailed("no_text");
     return NextResponse.json(
       { error: NO_TEXT_MESSAGE, code: "no_text", retryable: false },
@@ -276,9 +330,17 @@ export async function POST(request: NextRequest) {
   // Stash raw extracted text alongside the parsed fields so score heuristics
   // (here and in the standalone /score route) can use it without
   // re-downloading and re-parsing the PDF. Capped at what the prompt reads.
-  const enriched = { ...parsedContent, _resume_text: capStoredText(trimmed) };
+  // jsonbSafe: the model's strings come from the same text and can carry the
+  // characters Postgres refuses to store.
+  const enriched = jsonbSafe({
+    ...parsedContent,
+    _resume_text: capStoredText(trimmed),
+  });
   const heuristic = computeHeuristic(enriched);
-  const { finalScore, breakdown } = combineWithHeuristic(heuristic, analysis);
+  const { finalScore, breakdown } = combineWithHeuristic(
+    heuristic,
+    jsonbSafe(analysis)
+  );
 
   // The one write of a successful parse, after the single validation gate
   // above. promote_parsed_resume (migration 0008) saves parse and score and

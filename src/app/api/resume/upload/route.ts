@@ -1,6 +1,10 @@
 import { NextResponse, type NextRequest } from "next/server";
 
-import { ABANDONED_AFTER_MS, selectAbandoned } from "@/lib/resume/lifecycle";
+import {
+  ABANDONED_AFTER_MS,
+  removablePaths,
+  selectAbandoned,
+} from "@/lib/resume/lifecycle";
 import { buildStoragePath, isOwnStoragePath } from "@/lib/resume/storage-path";
 import {
   hasPdfSignature,
@@ -78,9 +82,31 @@ async function removeAbandoned(
       return;
     }
 
-    const paths = (deleted ?? [])
+    const deletedPaths = (deleted ?? [])
       .map((row) => row.storage_path as unknown)
       .filter((path): path is string => isOwnStoragePath(path, userId));
+    if (deletedPaths.length === 0) return;
+
+    // Two of a user's rows can name one file (they may write storage_path on
+    // their own rows). A file that a remaining row still names stays; if that
+    // cannot be established, nothing is removed.
+    const { data: stillNamed, error: namedError } = await supabase
+      .from("resumes")
+      .select("storage_path")
+      .eq("user_id", userId)
+      .in("storage_path", deletedPaths);
+
+    if (namedError) {
+      console.error(
+        `[resume/upload] ${deletedPaths.length} abandoned file(s) left in storage, could not check for other rows: ${namedError.message}`
+      );
+      return;
+    }
+
+    const paths = removablePaths(
+      deletedPaths,
+      (stillNamed ?? []).map((row) => String(row.storage_path))
+    );
     if (paths.length === 0) return;
 
     const { error: removeError } = await admin.storage.from(BUCKET).remove(paths);

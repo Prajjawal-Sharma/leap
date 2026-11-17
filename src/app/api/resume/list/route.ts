@@ -28,6 +28,9 @@ export async function GET() {
     .order("created_at", { ascending: false });
 
   if (error) {
+    // The page shows only "Failed to load resumes". A column missing because
+    // migration 0008 was not applied would otherwise leave no trace.
+    console.error(`[resume/list] query failed: ${error.message}`);
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 

@@ -188,8 +188,12 @@ export async function POST(request: NextRequest) {
   // reads from nowhere else (see pdf-text.ts, storage-path.ts).
   try {
     await readPdfText(bytes);
-  } catch {
-    // An error is an answer too, and a quick one. The parse route reports it.
+  } catch (err) {
+    // An error is an answer too, and a quick one. The parse route reports it
+    // to the user; the log is for the case where it is not the file at all —
+    // pdf.js or the canvas module failing to load would otherwise go unseen.
+    const message = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+    console.warn(`[resume/upload] reading the PDF before storing it failed: ${message}`);
   }
 
   const storagePath = buildStoragePath(user.id, file.name, Date.now());

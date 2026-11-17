@@ -31,10 +31,17 @@ export const MAX_PDF_PAGES = 30;
 
 // Errors from pdf-parse that describe the file itself. Reading it again
 // cannot change them. Any other error may pass.
+//
+// UnknownErrorException is what pdf.js calls an error it hits while reading
+// pages: a page tree that claims pages it does not have is "Page index 2 not
+// found.", raised the same way on every read. The document is read from
+// memory, so such an error comes from the bytes — or from something the
+// environment lacks, which a retry would lack too.
 const UNREADABLE_PDF_ERRORS = new Set([
   "InvalidPDFException",
   "PasswordException",
   "FormatError",
+  "UnknownErrorException",
 ]);
 
 /** The file is not a PDF that can be opened, and never will be. */

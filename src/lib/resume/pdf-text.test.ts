@@ -111,6 +111,43 @@ describe("readPdfText", () => {
     );
     await assert.rejects(readPdfText(broken), UnreadablePdfError);
   });
+
+  it("throws UnreadablePdfError for a page tree that claims pages it does not have", async () => {
+    // The root says five pages; a Pages node under it claims four and holds
+    // one. pdf.js fails on the second page, the same way on every read.
+    const text = (s: string) => `BT /F1 12 Tf 72 720 Td (${s}) Tj ET`;
+    const first = text("First page with enough text to count as a page of a resume");
+    const last = text("Last page");
+    const objects = [
+      "<< /Type /Catalog /Pages 2 0 R >>",
+      "<< /Type /Pages /Count 5 /Kids [3 0 R 5 0 R] >>",
+      "<< /Type /Pages /Parent 2 0 R /Count 4 /Kids [4 0 R] >>",
+      "<< /Type /Page /Parent 3 0 R /MediaBox [0 0 612 792] /Contents 6 0 R /Resources << /Font << /F1 8 0 R >> >> >>",
+      "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 7 0 R /Resources << /Font << /F1 8 0 R >> >> >>",
+      `<< /Length ${first.length} >>\nstream\n${first}\nendstream`,
+      `<< /Length ${last.length} >>\nstream\n${last}\nendstream`,
+      "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    ];
+    let out = "%PDF-1.4\n";
+    const offsets: number[] = [];
+    objects.forEach((object, i) => {
+      offsets.push(Buffer.byteLength(out));
+      out += `${i + 1} 0 obj\n${object}\nendobj\n`;
+    });
+    const xref = Buffer.byteLength(out);
+    out +=
+      `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n` +
+      offsets.map((o) => `${String(o).padStart(10, "0")} 00000 n \n`).join("");
+    out += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+    await assert.rejects(
+      readPdfText(new Uint8Array(Buffer.from(out, "latin1"))),
+      (err: unknown) => {
+        assert.ok(err instanceof UnreadablePdfError);
+        assert.match(err.message, /^UnknownErrorException: Page index \d+ not found/);
+        return true;
+      }
+    );
+  });
 });
 
 describe("the scan test on text read from real PDFs", () => {

@@ -8,6 +8,7 @@ import {
   MAX_UPLOAD_BYTES,
   parseErrorMessage,
   PDF_SIGNATURE_WINDOW,
+  SLOW_PDF_MESSAGE,
   UPLOAD_NOT_PDF_MESSAGE,
   UPLOAD_TOO_LARGE_MESSAGE,
 } from "@/lib/resume/upload-rules";
@@ -131,6 +132,10 @@ export default function ResumePage() {
   // made in this visit — there is no progress to show for it.
   const [restored, setRestored] = useState(false);
   const [resumes, setResumes] = useState<Resume[]>([]);
+  // False from the moment the server's rows may differ from `resumes` — a
+  // new upload was stored, or a refresh failed — until a list is fetched
+  // again. Nothing is rebuilt from a list that is known to be out of date.
+  const listIsCurrent = useRef(false);
   const [activeResume, setActiveResume] = useState<Resume | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -157,6 +162,7 @@ export default function ResumePage() {
   // shown beside them is the earlier résumé's.
   const showUploads = useCallback((list: Resume[]) => {
     const view = pickResumeView(list);
+    listIsCurrent.current = true;
     setResumes(list);
     setActiveResume(view.shown);
     if (view.pending) {
@@ -220,6 +226,8 @@ export default function ResumePage() {
     message: string,
     canRetry: boolean
   ) => {
+    // A failed parse can still have changed the row (marked unreadable).
+    listIsCurrent.current = false;
     try {
       const list = await fetchResumes();
       const row = list.find((r) => r.id === resumeId);
@@ -227,6 +235,7 @@ export default function ResumePage() {
         showUploads(list);
         return;
       }
+      listIsCurrent.current = true;
       setResumes(list);
       setActiveResume(pickResumeView(list).shown);
     } catch {
@@ -273,6 +282,8 @@ export default function ResumePage() {
         await showParseFailure(resumeId, failure.message, failure.canRetry);
         return;
       }
+      // Parsed and promoted on the server; the list on the page predates it.
+      listIsCurrent.current = false;
     }
 
     setPhase("scoring");
@@ -300,9 +311,11 @@ export default function ResumePage() {
 
     // `nothingStored`: the file never left the browser, or the server kept
     // none of it. What the list said then still holds — the analysis it
-    // showed, and an earlier upload that was waiting, which keeps its Retry.
+    // showed, and an earlier upload that was waiting, which keeps its Retry —
+    // provided the list itself is not already out of date.
     const refuse = (message: string, nothingStored: boolean) => {
-      const view = nothingStored ? pickResumeView(resumes) : null;
+      const view =
+        nothingStored && listIsCurrent.current ? pickResumeView(resumes) : null;
       if (view) setActiveResume(view.shown);
       if (view?.pending) {
         const name = view.pending.file_name || "Your earlier upload";
@@ -362,14 +375,23 @@ export default function ResumePage() {
         refuse(UPLOAD_NOT_PDF_MESSAGE, true);
         return;
       }
+      // The upload route reads the PDF before storing it and has 30 s to do
+      // so; when that runs out the platform answers, again not in JSON.
+      if (uploadRes.status === 504) {
+        refuse(SLOW_PDF_MESSAGE, false);
+        return;
+      }
       const uploadJson = await uploadRes.json();
       if (!uploadRes.ok) {
         throw new Error(uploadJson.error ?? "Upload failed");
       }
       resumeId = uploadJson.id as string;
+      // A row now exists that the list on the page does not have.
+      listIsCurrent.current = false;
     } catch (err) {
       // The request may have been stored before it failed, so the list the
       // page holds can no longer be relied on.
+      listIsCurrent.current = false;
       const msg = err instanceof Error ? err.message : "Unknown error";
       refuse(`Upload failed: ${msg}`, false);
       return;

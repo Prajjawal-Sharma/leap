@@ -56,6 +56,10 @@ export const NO_TEXT_MESSAGE =
 export const UNREADABLE_PDF_MESSAGE =
   "We couldn't open this PDF. Export your résumé as a PDF again and upload it.";
 
+/** For an upload that the platform stopped while the PDF was being read. */
+export const SLOW_PDF_MESSAGE =
+  "This PDF took too long to read. Export your résumé as a PDF again and upload it.";
+
 /** The message for a stored parse_error; an unknown code reads as unreadable. */
 export function parseErrorMessage(code: string | null | undefined): string {
   return code === "no_text" ? NO_TEXT_MESSAGE : UNREADABLE_PDF_MESSAGE;
@@ -70,16 +74,20 @@ export function parseErrorMessage(code: string | null | undefined): string {
  * of 4 --"), a scanner app's stamp, a page label, a timestamp. Added up over
  * pages those pass any total — four image-only pages are 60 raw characters
  * and passed the 50-character check this replaces, spending a Gemini call on
- * nothing — while one page of them stays in the tens.
+ * nothing — while one page of them stays in the tens. A line repeated on a
+ * page (a tiled watermark) is counted once, for the same reason.
  *
- * The number sits between the two things it has to tell apart. A stamp, a
- * page label and a timestamp on one page are under 60 characters together,
- * and most scans have none of them. The sparsest résumé the parse schema is
- * written to accept — a name, an email, one degree and one certificate (the
- * fresher fixture in schemas.test.ts) — is 90 as bare lines and 115 with its
- * two section headings. A résumé that sparse still gets parsed and scored;
- * refusing it here would be permanent, with a message about scans that is
- * wrong for it (Pitfall 3: sparse real data must pass).
+ * The number is a trade between two mistakes, and both still happen at the
+ * edges. A stamp, a page label and a timestamp on one page come to under 60
+ * characters; a scan carrying more distinct text than that on one page gets
+ * through and costs a Gemini call each time it is retried. On the other side,
+ * the sparse fresher CV the parse schema is tested against (schemas.test.ts:
+ * a name, an email, one degree, one certificate) is 90 characters as bare
+ * lines and 115 with its two headings, and passes; a real résumé with less
+ * than that on every page — or the same content in a denser script such as
+ * Chinese — is refused, permanently, with a message about scans that is wrong
+ * for it. Pitfall 3 (sparse real data must pass) is why the line is here and
+ * not at the 200 first proposed.
  */
 export const MIN_READABLE_CHARS = 80;
 
@@ -87,13 +95,18 @@ const PAGE_MARKER_RE = /^-- \d+ of \d+ --$/;
 
 /**
  * Length of the text a person would recognise as content: blank lines and
- * pdf-parse page markers dropped, runs of whitespace counted as one space.
+ * pdf-parse page markers dropped, a line that repeats counted once, runs of
+ * whitespace counted as one space.
  */
 export function readableLength(text: string): number {
+  const seen = new Set<string>();
   let length = 0;
   for (const raw of text.split(/\r\n?|\n/)) {
     const line = raw.replace(/\s+/g, " ").trim();
-    if (line.length === 0 || PAGE_MARKER_RE.test(line)) continue;
+    if (line.length === 0 || PAGE_MARKER_RE.test(line) || seen.has(line)) {
+      continue;
+    }
+    seen.add(line);
     length += line.length + (length > 0 ? 1 : 0);
   }
   return length;

@@ -124,8 +124,9 @@ describe("readableLength", () => {
     assert.equal(readableLength("ab\r\n\r\n   cd   "), 5);
     assert.equal(readableLength("ab\rcd"), 5);
   });
-  it("counts every line, repeated or not, and text set one character a line", () => {
-    assert.equal(readableLength("2021\n2021\n2021"), 14);
+  it("counts a line that repeats once", () => {
+    assert.equal(readableLength("2021\n2021\n2021"), 4);
+    assert.equal(readableLength("Scanned with CamScanner\n".repeat(4)), 23);
     assert.equal(readableLength("J\na\nn\ne"), 7);
   });
   it("measures the sample résumés used below", () => {
@@ -169,9 +170,10 @@ describe("hasReadableText", () => {
     }
   });
   it("refuses a scan whose stamp differs on every page", () => {
-    // Adding the pages up, as a whole-file total does, would let these through.
+    // Adding the pages up, as a whole-file total does, would let these
+    // through even at 200 characters.
     const pages = scan(12, stampedPage);
-    assert.ok(readableLength(wholeFile(pages)) > 600);
+    assert.ok(readableLength(wholeFile(pages)) > 200);
     assert.equal(hasReadableText(pages), false);
   });
   it("refuses scans the old 50-character check on the whole file let through", () => {
@@ -180,7 +182,26 @@ describe("hasReadableText", () => {
     assert.equal(hasReadableText(scan(4, () => "")), false);
     assert.equal(hasReadableText(scan(3, () => STAMP)), false);
   });
-  it("accepts the sparse résumé the parse schema is written to accept", () => {
+  it("refuses a scan whose stamp or watermark is repeated on one page", () => {
+    assert.equal(hasReadableText(["Scanned with CamScanner\n".repeat(4)]), false);
+    assert.equal(hasReadableText(["DRAFT - NOT FOR DISTRIBUTION\n".repeat(10)]), false);
+  });
+  // The two mistakes the threshold still makes, pinned so that moving it is a
+  // decision and not an accident.
+  it("lets through a scan with 80 or more distinct characters of stamps on one page", () => {
+    const stamps = [
+      "Evaluation Warning: The document was created with Spire.PDF for Python.",
+      "Scanned with CamScanner",
+    ].join("\n");
+    assert.equal(readableLength(stamps), 95);
+    assert.equal(hasReadableText([stamps]), true);
+  });
+  it("refuses a real résumé with under 80 characters on every page", () => {
+    const threeLines = "Meera Iyer\nmeera@example.com\nB.Sc, Anna University, 2026";
+    assert.equal(readableLength(threeLines), 56);
+    assert.equal(hasReadableText([threeLines]), false);
+  });
+  it("accepts the sparse résumé the parse schema is tested against", () => {
     assert.equal(hasReadableText([FRESHER_CV]), true);
     assert.equal(hasReadableText([FRESHER_CV_NO_HEADINGS]), true);
   });

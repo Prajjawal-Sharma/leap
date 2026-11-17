@@ -282,7 +282,9 @@ export default function ResumePage() {
       const msg = err instanceof Error ? err.message : "Unknown error";
       // The combined call already persisted the parse AND the score — only
       // the results refresh failed. Say so, or the user re-uploads and burns
-      // another Gemini request for nothing.
+      // another Gemini request for nothing. The analysis on show predates
+      // that parse, so it goes until the refresh works.
+      setActiveResume(null);
       setError(`Refresh failed: ${msg}`);
       setRetryable(true);
       setFailedStep("score");
@@ -296,9 +298,23 @@ export default function ResumePage() {
     setRetryable(false);
     setRestored(false);
 
-    const refuse = (message: string) => {
-      setError(message);
-      setFailedStep("upload");
+    // `nothingStored`: the file never left the browser, or the server kept
+    // none of it. What the list said then still holds — the analysis it
+    // showed, and an earlier upload that was waiting, which keeps its Retry.
+    const refuse = (message: string, nothingStored: boolean) => {
+      const view = nothingStored ? pickResumeView(resumes) : null;
+      if (view) setActiveResume(view.shown);
+      if (view?.pending) {
+        const name = view.pending.file_name || "Your earlier upload";
+        setError(`${message} ${name} is still waiting to be processed.`);
+        setLastResumeId(view.pending.id);
+        setFailedStep("parse");
+        setRetryable(true);
+        setRestored(true);
+      } else {
+        setError(message);
+        setFailedStep("upload");
+      }
       setPhase("error");
     };
 
@@ -307,7 +323,7 @@ export default function ResumePage() {
     // extension, so a renamed text file passes it and an oddly-typed PDF
     // fails it.
     if (file.size > MAX_UPLOAD_BYTES) {
-      refuse(UPLOAD_TOO_LARGE_MESSAGE);
+      refuse(UPLOAD_TOO_LARGE_MESSAGE, true);
       return;
     }
     let head: Uint8Array;
@@ -316,11 +332,11 @@ export default function ResumePage() {
         await file.slice(0, PDF_SIGNATURE_WINDOW).arrayBuffer()
       );
     } catch {
-      refuse("Upload failed: We couldn't read this file. Choose it again.");
+      refuse("Upload failed: We couldn't read this file. Choose it again.", true);
       return;
     }
     if (!hasPdfSignature(head)) {
-      refuse(UPLOAD_NOT_PDF_MESSAGE);
+      refuse(UPLOAD_NOT_PDF_MESSAGE, true);
       return;
     }
 
@@ -339,11 +355,11 @@ export default function ResumePage() {
       // Read by status, not body: the platform answers an oversized request
       // itself, with a 413 that is not JSON.
       if (uploadRes.status === 413) {
-        refuse(UPLOAD_TOO_LARGE_MESSAGE);
+        refuse(UPLOAD_TOO_LARGE_MESSAGE, true);
         return;
       }
       if (uploadRes.status === 415) {
-        refuse(UPLOAD_NOT_PDF_MESSAGE);
+        refuse(UPLOAD_NOT_PDF_MESSAGE, true);
         return;
       }
       const uploadJson = await uploadRes.json();
@@ -352,8 +368,10 @@ export default function ResumePage() {
       }
       resumeId = uploadJson.id as string;
     } catch (err) {
+      // The request may have been stored before it failed, so the list the
+      // page holds can no longer be relied on.
       const msg = err instanceof Error ? err.message : "Unknown error";
-      refuse(`Upload failed: ${msg}`);
+      refuse(`Upload failed: ${msg}`, false);
       return;
     }
 
@@ -466,24 +484,24 @@ export default function ResumePage() {
             {phase === "ready" ? (
               <span
                 aria-hidden="true"
-                className="flex h-6 w-6 items-center justify-center rounded-full bg-green-500 text-white text-sm font-bold"
+                className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-green-500 text-white text-sm font-bold"
               >
                 ✓
               </span>
             ) : phase === "error" ? (
               <span
                 aria-hidden="true"
-                className="flex h-6 w-6 items-center justify-center rounded-full bg-red-500 text-white text-sm font-bold"
+                className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-red-500 text-white text-sm font-bold"
               >
                 !
               </span>
             ) : (
               <span
                 aria-hidden="true"
-                className="h-6 w-6 rounded-full border-2 border-white/20 border-t-[#6366f1] animate-spin"
+                className="h-6 w-6 shrink-0 rounded-full border-2 border-white/20 border-t-[#6366f1] animate-spin"
               />
             )}
-            <p className="flex-1 text-sm font-medium text-neutral-100">
+            <p className="flex-1 min-w-0 break-words text-sm font-medium text-neutral-100">
               {phase === "ready"
                 ? "Resume uploaded successfully"
                 : phase === "error"
